@@ -1,0 +1,25 @@
+{
+  "short_name": "NutriKick",
+  "name": "Nutri-Kick AI",
+  "description": "A personalized sports nutritionist and performance coach AI for football players, providing meal plans, recipes, hydration strategies, and expert Q&A based on user profiles.",
+  "icons": [
+    {
+      "src": "./icons/icon-192x192.png",
+      "type": "image/png",
+      "sizes": "192x192",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "./icons/icon-512x512.png",
+      "type": "image/png",
+      "sizes": "512x512",
+      "purpose": "any maskable"
+    }
+  ],
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#0F172A",
+  "theme_color": "#0F172A",
+  "scope": ".",
+  "orientation": "portrait-primary"
+}

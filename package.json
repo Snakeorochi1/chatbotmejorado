@@ -1,0 +1,16 @@
+{
+  "name": "nutrikick-ai-static",
+  "version": "1.0.0",
+  "description": "Nutri-Kick AI for static hosting platforms like Netlify/Vercel",
+  "scripts": {
+    "build": "node scripts/set-env.js && esbuild ./index.tsx --bundle --outfile=./main.js --format=esm --jsx=automatic --platform=browser --external:react --external:react/jsx-runtime --external:react-dom/client --external:@google/genai",
+    "start": "echo \"No specific start script for static deployment. Use a local HTTP server (e.g., 'npx serve .') for development if needed.\""
+  },
+  "engines": {
+    "node": "18.x"
+  },
+  "devDependencies": {
+    "fs-extra": "^11.2.0",
+    "esbuild": "^0.23.0"
+  }
+}
