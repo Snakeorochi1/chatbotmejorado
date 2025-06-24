@@ -13,6 +13,7 @@ const USER_PROFILE_STORAGE_KEY = 'nutrikick_userProfile_v3';
 const CHAT_MESSAGES_STORAGE_KEY = 'nutrikick_chatMessages_v2';
 const DAILY_INTAKE_STORAGE_KEY = 'nutrikick_dailyIntake_v2';
 const NUTRIENT_TARGETS_STORAGE_KEY = 'nutrikick_nutrientTargets_v2';
+const SUPABASE_USER_PROFILE_ROW_ID_KEY = 'nutrikick_supabase_profile_row_id_v3';
 
 
 const initialDefaultUserProfile: UserProfile = {
@@ -331,6 +332,8 @@ const App: React.FC = () => {
         calculationMessage += "Para un cálculo más preciso, selecciona 'Masculino' o 'Femenino' en género.\n\n";
         setCurrentBMR(null); setCurrentTDEE(null); setNutrientTargets(initialDefaultNutrientTargets);
         }
+        
+        calculationMessage += `\n\n¿Te gustaría saber más sobre qué es el Metabolismo Basal (MB), el Requerimiento Calórico Total Estimado (RCTE), o qué son los macronutrientes? ¡Pregúntame!`;
 
         const newAiCalcMessage: Message = { id: crypto.randomUUID(), sender: 'ai', text: calculationMessage.trim(), timestamp: new Date() };
         setMessages(prev => {
@@ -489,7 +492,8 @@ const App: React.FC = () => {
   const handleSendImageMessage = useCallback(async (imageBase64DataUri: string) => {
     const mimeType = dataURItoMIME(imageBase64DataUri);
     const base64Data = imageBase64DataUri.split(',')[1];
-    const promptForImage = chatInputRef.current?.value.trim() || "Analiza la imagen que he enviado. Si es comida, intenta estimar sus nutrientes para mi registro diario.";
+    // Updated default prompt for images
+    const promptForImage = chatInputRef.current?.value.trim() || "He enviado una imagen. ¿Puedes ayudarme con ella? Si es comida y tienes suficiente información (o después de que te dé más detalles si los pides), intenta estimar sus nutrientes para mi registro diario.";
     if (chatInputRef.current) chatInputRef.current.value = ""; 
     
     handleSendMessage(promptForImage, 'image', undefined, { base64Data, mimeType, dataUri: imageBase64DataUri });
@@ -608,6 +612,28 @@ const App: React.FC = () => {
     } catch (error) { console.error("Error saving to localStorage:", error); }
   }, [userProfile, messages, dailyIntake, nutrientTargets]);
 
+  const handleClearCache = useCallback(() => {
+    if (window.confirm("¿Estás seguro de que quieres borrar todos tus datos locales (perfil, chat, registro de comidas) y empezar de nuevo? Esta acción no se puede deshacer.")) {
+      localStorage.removeItem(USER_PROFILE_STORAGE_KEY);
+      localStorage.removeItem(CHAT_MESSAGES_STORAGE_KEY);
+      localStorage.removeItem(DAILY_INTAKE_STORAGE_KEY);
+      localStorage.removeItem(NUTRIENT_TARGETS_STORAGE_KEY);
+      localStorage.removeItem(SUPABASE_USER_PROFILE_ROW_ID_KEY);
+
+      setUserProfile({ ...initialDefaultUserProfile });
+      setMessages([]); // This will trigger the welcome message useEffect
+      setDailyIntake({ ...initialDefaultDailyIntake });
+      setNutrientTargets({ ...initialDefaultNutrientTargets });
+      setCurrentBMR(null);
+      setCurrentTDEE(null);
+      
+      setActiveTab('chat'); // Switch to chat tab to show welcome message
+      setError(null);
+      setSuccessMessage("Datos locales borrados. ¡Empecemos de nuevo!");
+      setTimeout(() => setSuccessMessage(null), 3000);
+    }
+  }, []);
+
 
   return (
     <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-4 selection:bg-orange-500 selection:text-white text-slate-100">
@@ -648,6 +674,7 @@ const App: React.FC = () => {
               onUpdateProfile={handleProfileUpdate}
               onEditingComplete={handleProfileEditingComplete}
               isActive={activeTab === 'profile'} 
+              onClearCache={handleClearCache} // Pass the new handler
             /> 
           )}
         </main>

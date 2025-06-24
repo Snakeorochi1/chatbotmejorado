@@ -1,17 +1,24 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   UserProfile, Gender, FootballPosition, TrainingLoad, TrainingFrequency, PersonalGoal,
   DietaryApproachOptions, DietaryRestrictionOptions, 
   WellnessFocusAreaOptions, MoodTodayOptions, TrainedTodayOptions, HadBreakfastOptions, EnergyLevelOptions,
   SportsDiscipline, BasketballPosition, BaseballPosition, VolleyballPosition, AthleticGoalOptions
 } from '../types';
+import { TrashIcon } from './Icons'; // Added TrashIcon
 
 interface ProfileEditorProps {
   initialProfile: UserProfile;
   onUpdateProfile: (profile: UserProfile, isMainUpdate: boolean) => void;
   onEditingComplete: () => void;
   isActive: boolean;
+  onClearCache: () => void; // New prop for clearing cache
+}
+
+interface ValidationError {
+  field: string; // Corresponds to the input ID
+  message: string;
 }
 
 const localInitialDefaultUserProfile: UserProfile = {
@@ -84,7 +91,7 @@ const phoneCountryCodes = [
   { code: "+53", name: "Cuba (+53)" },
   { code: "+593", name: "Ecuador (+593)" },
   { code: "+503", name: "El Salvador (+503)" },
-  { code: "+1", name: "EE.UU./Canadá (+1)" }, // Covers USA, Canada, Dominican Republic, Puerto Rico, etc.
+  { code: "+1", name: "EE.UU./Canadá (+1)" }, 
   { code: "+34", name: "España (+34)" },
   { code: "+33", name: "Francia (+33)" },
   { code: "+502", name: "Guatemala (+502)" },
@@ -105,13 +112,11 @@ const phoneCountryCodes = [
 ].sort((a, b) => a.name.localeCompare(b.name));
 
 
-const defaultPhoneCountryCode = "+52"; // Mexico as default
+const defaultPhoneCountryCode = "+52"; 
 
 const splitPhoneNumber = (fullPhoneNumber: string | undefined): { countryCode: string; localPart: string } => {
   if (!fullPhoneNumber) return { countryCode: defaultPhoneCountryCode, localPart: "" };
 
-  // Sort by length of code descending to match longest prefix first (e.g., +1 then +1-xxx)
-  // Use the unsorted list for prefix matching for correctness, then find the corresponding object in the sorted list
   const unsortedPhoneCountryCodes = [
     { code: "+54", name: "Argentina (+54)" }, { code: "+591", name: "Bolivia (+591)" }, { code: "+56", name: "Chile (+56)" },
     { code: "+57", name: "Colombia (+57)" }, { code: "+506", name: "Costa Rica (+506)" }, { code: "+53", name: "Cuba (+53)" },
@@ -132,7 +137,6 @@ const splitPhoneNumber = (fullPhoneNumber: string | undefined): { countryCode: s
     }
   }
   
-  // Fallback for codes not in the list but starting with '+'
   const plusMatch = fullPhoneNumber.match(/^\+(\d{1,4})/);
   if (plusMatch) {
     const extractedCode = `+${plusMatch[1]}`;
@@ -143,35 +147,65 @@ const splitPhoneNumber = (fullPhoneNumber: string | undefined): { countryCode: s
 };
 
 
-const isMainProfileDataValid = (profile: UserProfile, localPhonePart?: string): boolean => {
+const getMainProfileValidationErrors = (profile: UserProfile, localPhonePart?: string): ValidationError[] => {
+  const errors: ValidationError[] = [];
   const ageNum = parseInt(profile.age);
   const weightNum = parseFloat(profile.weight);
-  const heightNum = parseInt(profile.height);
+  const heightNum = parseFloat(profile.height);
 
-  if (!profile.name?.trim()) return false;
-  if (!profile.email?.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(profile.email)) return false;
-  
-  const fullPhoneDigits = profile.phone?.replace(/\D/g, '') || "";
-  if (!profile.phone?.trim() || fullPhoneDigits.length < 7 || fullPhoneDigits.length > 15) return false;
-  if (localPhonePart !== undefined && !localPhonePart.replace(/\D/g, '').trim()) return false;
-
-
-  if (!profile.age || isNaN(ageNum) || ageNum <= 0) return false;
-  if (!profile.weight || isNaN(weightNum) || weightNum <= 0 || weightNum > 400) return false;
-  if (!profile.height || isNaN(heightNum) || heightNum < 60) return false; 
-  
-  if (profile.gender === "" || !Object.values(Gender).includes(profile.gender as Gender)) return false;
-  if (profile.goals === "" || !Object.values(PersonalGoal).includes(profile.goals as PersonalGoal)) return false;
-
-  if (profile.isAthlete) {
-    if (!profile.sportsDiscipline) return false;
-    if (profile.sportsDiscipline === SportsDiscipline.Other && !profile.customSportsDiscipline?.trim()) return false;
-    if (!profile.trainingLoad || !Object.values(TrainingLoad).includes(profile.trainingLoad as TrainingLoad)) return false;
-  } else {
-    if (!profile.trainingFrequency || !Object.values(TrainingFrequency).includes(profile.trainingFrequency as TrainingFrequency)) return false;
+  if (!profile.name?.trim()) errors.push({ field: "name", message: "El nombre completo es requerido." });
+  if (!profile.email?.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(profile.email)) {
+    errors.push({ field: "email", message: "Ingresa un correo electrónico válido." });
   }
   
-  return true;
+  const localPhonePartDigits = localPhonePart?.replace(/\D/g, '') || "";
+  if (!localPhonePartDigits.trim()) {
+    errors.push({ field: "localPhonePart", message: "El número de teléfono local es requerido." });
+  } else if (localPhonePartDigits.length < 7 || localPhonePartDigits.length > 13) { 
+    errors.push({ field: "localPhonePart", message: "El número de teléfono local debe tener entre 7 y 13 dígitos." });
+  }
+
+  if (!profile.age || isNaN(ageNum) || ageNum <= 0 || ageNum > 120) {
+    errors.push({ field: "age", message: "Ingresa una edad válida (1-120)." });
+  }
+  if (!profile.weight || isNaN(weightNum) || weightNum <= 10 || weightNum > 400) {
+    errors.push({ field: "weight", message: "Ingresa un peso válido (10-400 kg)." });
+  }
+
+  if (!profile.height || isNaN(heightNum) || heightNum <= 0) {
+    errors.push({ field: "height", message: "Ingresa una altura válida en centímetros." });
+  } else if (heightNum > 0 && heightNum < 3) { // Check for likely meter input (e.g., 1.75)
+    errors.push({ field: "height", message: `Altura (${profile.height}) parece estar en metros. Ingresa en centímetros (Ej: 175 para 1.75m).` });
+  } else if (heightNum < 60) { // Check if too low, even if in cm
+    errors.push({ field: "height", message: `Altura (${profile.height} cm) es muy baja. Si es correcta, podría afectar los cálculos. Verifica si es un error.` });
+  } else if (heightNum > 250) { // Check if too high
+    errors.push({ field: "height", message: "Ingresa una altura válida (hasta 250 cm)." });
+  }
+  
+  if (profile.gender === "" || !Object.values(Gender).includes(profile.gender as Gender)) {
+    errors.push({ field: "gender", message: "Selecciona tu género." });
+  }
+  if (profile.goals === "" || !Object.values(PersonalGoal).includes(profile.goals as PersonalGoal)) {
+    errors.push({ field: "goals", message: "Selecciona tu objetivo principal." });
+  }
+
+  if (profile.isAthlete) {
+    if (!profile.sportsDiscipline) {
+      errors.push({ field: "sportsDiscipline", message: "Selecciona tu disciplina deportiva." });
+    }
+    if (profile.sportsDiscipline === SportsDiscipline.Other && !profile.customSportsDiscipline?.trim()) {
+      errors.push({ field: "customSportsDiscipline", message: "Especifica tu disciplina deportiva." });
+    }
+    if (!profile.trainingLoad || !Object.values(TrainingLoad).includes(profile.trainingLoad as TrainingLoad)) {
+      errors.push({ field: "trainingLoad", message: "Selecciona tu carga de entrenamiento." });
+    }
+  } else {
+    if (!profile.trainingFrequency || !Object.values(TrainingFrequency).includes(profile.trainingFrequency as TrainingFrequency)) {
+      errors.push({ field: "trainingFrequency", message: "Selecciona tu frecuencia de entrenamiento." });
+    }
+  }
+  
+  return errors;
 };
 
 const getInitialEditorProfileState = (initialPropsProfile: UserProfile): UserProfile => {
@@ -194,7 +228,7 @@ const getInitialEditorProfileState = (initialPropsProfile: UserProfile): UserPro
         delete (profileBase as any).sportsDiscipline;
         delete (profileBase as any).customSportsDiscipline;
         delete (profileBase as any).position;
-        delete (profileBase as any).trainingLoad;
+        delete (profileBase as any).trainingLoad; 
         delete (profileBase as any).athleticGoals;
     }
     
@@ -215,7 +249,7 @@ const getInitialEditorProfileState = (initialPropsProfile: UserProfile): UserPro
 };
 
 
-export const ProfileEditor: React.FC<ProfileEditorProps> = ({ initialProfile, onUpdateProfile, onEditingComplete, isActive }) => {
+export const ProfileEditor: React.FC<ProfileEditorProps> = ({ initialProfile, onUpdateProfile, onEditingComplete, isActive, onClearCache }) => {
   const [profile, setProfile] = useState<UserProfile>(() => getInitialEditorProfileState(initialProfile));
   const [isAthlete, setIsAthlete] = useState<boolean>(() => typeof initialProfile.isAthlete === 'boolean' ? initialProfile.isAthlete : false);
   
@@ -223,11 +257,14 @@ export const ProfileEditor: React.FC<ProfileEditorProps> = ({ initialProfile, on
   const [localPhoneCountryCode, setLocalPhoneCountryCode] = useState<string>(initialCountryCode);
   const [localPhonePart, setLocalPhonePart] = useState<string>(initialLocalPart);
 
+  const [validationErrors, setValidationErrors] = useState<ValidationError[]>([]);
   const [isSubmitEnabled, setIsSubmitEnabled] = useState<boolean>(false);
   const [currentPositionOptions, setCurrentPositionOptions] = useState<Record<string, string> | null>(null);
   const [showPositionField, setShowPositionField] = useState<boolean>(true);
   const [positionInputType, setPositionInputType] = useState<'select' | 'text' | 'none'>('none');
   const [showDailyCheckInSection, setShowDailyCheckInSection] = useState<boolean>(false);
+  
+  const formRef = useRef<HTMLFormElement>(null);
 
   useEffect(() => {
     const newResolvedProfile = getInitialEditorProfileState(initialProfile);
@@ -236,37 +273,24 @@ export const ProfileEditor: React.FC<ProfileEditorProps> = ({ initialProfile, on
     const { countryCode, localPart } = splitPhoneNumber(initialProfile.phone);
     setLocalPhoneCountryCode(countryCode);
     setLocalPhonePart(localPart);
+    setValidationErrors([]); // Clear errors when initial profile changes
   }, [initialProfile]);
 
   useEffect(() => {
     if (isActive) {
-      // Only reset daily check-in section when tab becomes active,
-      // not necessarily every time initialProfile changes if editor is already active.
-      const currentlyShowingCheckIn = showDailyCheckInSection;
-      const editorDataMatchesInitialForCheckIn = 
-          profile.moodToday === initialProfile.moodToday &&
-          profile.trainedToday === initialProfile.trainedToday &&
-          profile.hadBreakfast === initialProfile.hadBreakfast &&
-          profile.energyLevel === initialProfile.energyLevel;
-
-      if (currentlyShowingCheckIn && !editorDataMatchesInitialForCheckIn) {
-        // If user was in check-in section and made changes, don't hide it immediately on tab switch
-        // This might need more refined logic if we want to preserve check-in edits across tab switches
-      } else {
-         setShowDailyCheckInSection(false);
-      }
+      setShowDailyCheckInSection(false);
+      setValidationErrors([]); // Clear errors when tab becomes active
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isActive]); // Removed initialProfile from deps to avoid premature reset
+  }, [isActive]); 
   
   useEffect(() => {
-    const sanitizedLocalPart = localPhonePart.replace(/\D/g, ''); // Remove non-digits
+    const sanitizedLocalPart = localPhonePart.replace(/\D/g, ''); 
     const fullPhoneNumber = localPhoneCountryCode + sanitizedLocalPart;
     setProfile(prev => ({ ...prev, phone: fullPhoneNumber }));
   }, [localPhoneCountryCode, localPhonePart]);
 
   useEffect(() => {
-    setIsSubmitEnabled(isMainProfileDataValid(profile, localPhonePart));
+    setIsSubmitEnabled(getMainProfileValidationErrors(profile, localPhonePart).length === 0);
   }, [profile, localPhonePart]);
 
   useEffect(() => {
@@ -298,7 +322,6 @@ export const ProfileEditor: React.FC<ProfileEditorProps> = ({ initialProfile, on
     if (name === "localPhoneCountryCode") {
         setLocalPhoneCountryCode(value);
     } else if (name === "localPhonePart") {
-        // Allow digits, spaces, hyphens, parentheses for flexibility during input
         const filteredValue = value.replace(/[^\d\s()-]/g, '');
         setLocalPhonePart(filteredValue);
     } else {
@@ -358,14 +381,21 @@ export const ProfileEditor: React.FC<ProfileEditorProps> = ({ initialProfile, on
   const handleMainSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     let profileToUpdate = { ...profile };
-    profileToUpdate.phone = localPhoneCountryCode + localPhonePart.replace(/\D/g, ''); // Ensure phone is correctly combined and cleaned
+    profileToUpdate.phone = localPhoneCountryCode + localPhonePart.replace(/\D/g, ''); 
 
     if (profileToUpdate.isAthlete && profileToUpdate.sportsDiscipline === SportsDiscipline.Other) {
       profileToUpdate.sportsDiscipline = profileToUpdate.customSportsDiscipline?.trim() || SportsDiscipline.Other;
     }
+    
+    const errors = getMainProfileValidationErrors(profileToUpdate, localPhonePart);
+    setValidationErrors(errors);
 
-    if (!isMainProfileDataValid(profileToUpdate, localPhonePart)) {
-      alert("Por favor, completa todos los campos requeridos (*) correctamente. Asegúrate que el número de teléfono local no esté vacío y contenga al menos 7 dígitos.");
+    if (errors.length > 0) {
+      const firstErrorField = document.getElementById(errors[0].field);
+      if (firstErrorField) {
+        firstErrorField.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        firstErrorField.focus({ preventScroll: true });
+      }
       return;
     }
     onUpdateProfile(profileToUpdate, true); 
@@ -373,7 +403,6 @@ export const ProfileEditor: React.FC<ProfileEditorProps> = ({ initialProfile, on
   };
 
   const handleDailyCheckInSave = () => {
-    // Ensure the main profile.phone is up-to-date from local parts before this final save
     const profileWithCurrentPhone = {
         ...profile,
         phone: localPhoneCountryCode + localPhonePart.replace(/\D/g, '')
@@ -393,6 +422,16 @@ export const ProfileEditor: React.FC<ProfileEditorProps> = ({ initialProfile, on
   const checkboxInputClasses = "form-checkbox h-4 w-4 text-orange-500 bg-slate-500 border-slate-400 rounded focus:ring-orange-500 focus:ring-offset-slate-700";
   const primaryButtonClasses = "w-full flex justify-center py-3 px-4 border border-transparent rounded-lg shadow-md text-sm font-medium text-white bg-orange-600 hover:bg-orange-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-slate-700 focus:ring-orange-600 transition-transform transform hover:scale-105 active:scale-95 disabled:bg-slate-500 disabled:text-slate-400 disabled:cursor-not-allowed disabled:hover:scale-100";
   const secondaryButtonClasses = "w-full flex justify-center py-2 px-4 border border-slate-500 rounded-lg shadow-sm text-sm font-medium text-slate-200 bg-slate-600 hover:bg-slate-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-slate-700 focus:ring-orange-500 transition-colors";
+  const destructiveButtonClasses = "w-full flex items-center justify-center py-2 px-4 border border-red-700 rounded-lg shadow-sm text-sm font-medium text-red-300 bg-red-900/50 hover:bg-red-800/70 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-slate-700 focus:ring-red-600 transition-colors";
+
+
+  const focusField = (fieldId: string) => {
+    const fieldElement = document.getElementById(fieldId);
+    if (fieldElement) {
+      fieldElement.focus();
+      fieldElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  };
 
   return (
     <div className="p-4 md:p-6 bg-slate-700 text-slate-200 rounded-lg shadow-xl animate-fadeIn">
@@ -403,7 +442,26 @@ export const ProfileEditor: React.FC<ProfileEditorProps> = ({ initialProfile, on
          <h2 className="text-2xl font-semibold text-slate-100 mb-6 border-b pb-3 border-slate-600">Check-in Diario (Opcional)</h2>
       )}
 
-      <form onSubmit={handleMainSubmit} className="space-y-6">
+      {validationErrors.length > 0 && !showDailyCheckInSection && (
+        <div className="bg-red-700/30 border border-red-500 text-red-300 px-4 py-3 rounded-md mb-6 shadow-md animate-fadeIn" role="alert">
+          <p className="font-bold text-red-200">Por favor, corrige los siguientes errores:</p>
+          <ul className="list-disc list-inside mt-2 text-sm space-y-1">
+            {validationErrors.map((error, index) => (
+              <li key={index}>
+                <button 
+                  onClick={() => focusField(error.field)} 
+                  className="text-red-300 hover:text-red-200 underline focus:outline-none focus:ring-1 focus:ring-red-400 rounded-sm px-0.5"
+                  aria-label={`Ir al campo ${error.field}`}
+                >
+                  {error.message}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      <form ref={formRef} onSubmit={handleMainSubmit} className="space-y-6">
         {!showDailyCheckInSection && (
           <>
             <fieldset className="border border-slate-600 p-4 rounded-md">
@@ -440,6 +498,8 @@ export const ProfileEditor: React.FC<ProfileEditorProps> = ({ initialProfile, on
                         className={`${commonInputClasses} flex-grow`} 
                         placeholder="Ej: 5512345678" 
                         aria-label="Número de teléfono local"
+                        pattern="\s*\d[\d\s()-]{5,13}\d\s*"
+                        title="Ingresa un número válido (7-13 dígitos, opcionalmente con espacios, guiones o paréntesis)."
                     />
                   </div>
                 </div>
@@ -451,15 +511,15 @@ export const ProfileEditor: React.FC<ProfileEditorProps> = ({ initialProfile, on
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-4">
                 <div>
                   <label htmlFor="age" className="block text-sm font-medium text-slate-300 mb-1">Edad (años) <span className="text-red-400">*</span> 🎂</label>
-                  <input type="number" name="age" id="age" value={profile.age || ''} onChange={handleChange} required className={commonInputClasses} placeholder="Ej: 24" />
+                  <input type="number" name="age" id="age" value={profile.age || ''} onChange={handleChange} required className={commonInputClasses} placeholder="Ej: 24" min="1" max="120" />
                 </div>
                 <div>
                   <label htmlFor="weight" className="block text-sm font-medium text-slate-300 mb-1">Peso (kg) <span className="text-red-400">*</span> ⚖️</label>
-                  <input type="number" step="0.1" name="weight" id="weight" value={profile.weight || ''} onChange={handleChange} required className={commonInputClasses} placeholder="Ej: 78.5" />
+                  <input type="number" step="0.1" name="weight" id="weight" value={profile.weight || ''} onChange={handleChange} required className={commonInputClasses} placeholder="Ej: 78.5" min="10" max="400"/>
                 </div>
                 <div>
                   <label htmlFor="height" className="block text-sm font-medium text-slate-300 mb-1">Altura (cm) <span className="text-red-400">*</span> 📏</label>
-                  <input type="number" name="height" id="height" value={profile.height || ''} onChange={handleChange} required className={commonInputClasses} placeholder="Ej: 180" />
+                  <input type="number" name="height" id="height" value={profile.height || ''} onChange={handleChange} required className={commonInputClasses} placeholder="Ej: 180" min="1" />
                 </div>
                 <div>
                   <label htmlFor="gender" className="block text-sm font-medium text-slate-300 mb-1">Género <span className="text-red-400">*</span> 🚻</label>
@@ -610,9 +670,23 @@ export const ProfileEditor: React.FC<ProfileEditorProps> = ({ initialProfile, on
               </div>
             </fieldset>
             <div className="pt-6">
-              <button type="submit" disabled={!isSubmitEnabled} className={primaryButtonClasses} aria-live="polite">
-                {isSubmitEnabled ? 'Actualizar Perfil y Ver Check-in Diario ➡️' : 'Completa los campos requeridos (*)'}
+              <button type="submit" disabled={!isSubmitEnabled && validationErrors.length > 0} className={primaryButtonClasses} aria-live="polite">
+                {isSubmitEnabled || validationErrors.length === 0 ? 'Actualizar Perfil y Ver Check-in Diario ➡️' : 'Revisa los campos marcados (*)'}
               </button>
+            </div>
+            <div className="mt-8 pt-6 border-t border-slate-600">
+                <button 
+                  type="button" 
+                  onClick={onClearCache} 
+                  className={destructiveButtonClasses}
+                  aria-label="Borrar datos locales y empezar de nuevo"
+                >
+                  <TrashIcon className="w-5 h-5 mr-2" />
+                  Borrar Datos Locales y Empezar de Nuevo
+                </button>
+                <p className="text-xs text-slate-400 mt-2 text-center">
+                  Esto eliminará tu perfil, historial de chat y registro de comidas de este navegador.
+                </p>
             </div>
           </>
         )}
