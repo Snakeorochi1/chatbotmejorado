@@ -2,7 +2,7 @@ const CACHE_NAME = 'nutrikick-ai-cache-v3'; // Incremented cache version
 const PRECACHE_ASSETS = [
   './',
   './index.html',
-  './env-config.js', 
+  './env-config.js',
   './main.js', // Compiled application code
   './favicon.svg',
   './manifest.json',
@@ -28,7 +28,7 @@ self.addEventListener('install', (event) => {
       })
       .then(() => {
         console.log('All pre-cache assets processed for version:', CACHE_NAME);
-        return self.skipWaiting(); 
+        return self.skipWaiting();
       })
   );
 });
@@ -49,15 +49,15 @@ self.addEventListener('activate', (event) => {
       );
     }).then(() => {
       console.log('Old caches cleaned. Service worker activated for version:', CACHE_NAME);
-      return self.clients.claim(); 
+      return self.clients.claim();
     })
   );
 });
 
 // Fetch event: Serve cached content or fetch from network
 self.addEventListener('fetch', (event) => {
-  // Always bypass cache for Gemini API calls
-  if (event.request.url.includes('generativelanguage.googleapis.com')) {
+  // Always bypass cache for any googleapis.com calls (covers Gemini, Firestore, etc.)
+  if (event.request.url.includes('googleapis.com')) {
     event.respondWith(fetch(event.request));
     return;
   }
@@ -67,7 +67,7 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(
       caches.match(event.request).then((cachedResponse) => {
         if (cachedResponse) {
-          return cachedResponse; 
+          return cachedResponse;
         }
 
         return fetch(event.request).then((networkResponse) => {
@@ -88,6 +88,7 @@ self.addEventListener('fetch', (event) => {
       })
     );
   } else {
+    // For non-GET requests, just fetch from network
     event.respondWith(fetch(event.request));
   }
 });

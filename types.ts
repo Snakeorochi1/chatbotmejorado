@@ -1,15 +1,16 @@
 
 
 export interface UserProfile {
+  name: string;
+  email: string;
+  phone: string;
   age: string;
   weight: string;
   height: string;
-  gender: string; // Will be validated against the simplified Gender enum
+  gender: Gender | ""; 
   isAthlete: boolean; 
-  // Fields for athletes (isAthlete = true)
   position?: FootballPosition; 
   trainingLoad?: TrainingLoad;
-  // Fields for non-athletes (isAthlete = false)
   trainingFrequency?: TrainingFrequency; 
   goals: PersonalGoal | ""; 
 }
@@ -26,7 +27,6 @@ export enum Gender {
   Female = "Femenino",
 }
 
-// For athlete specific questions
 export enum FootballPosition {
   Goalkeeper = "Portero",
   Defender = "Defensa",
@@ -35,21 +35,19 @@ export enum FootballPosition {
   Versatile = "Versátil / Otro"
 }
 
-// For athlete specific questions
 export enum TrainingLoad {
-  RestDay = "Día de Descanso", // Factor: 1.2
-  LightTraining = "Entrenamiento Ligero", // Factor: 1.375
-  IntenseTraining = "Entrenamiento Intenso", // Factor: 1.725
-  MatchDay = "Día de Partido" // Factor: 1.9
+  RestDay = "Día de Descanso", 
+  LightTraining = "Entrenamiento Ligero", 
+  IntenseTraining = "Entrenamiento Intenso", 
+  MatchDay = "Día de Partido" 
 }
 
-// For non-athlete specific questions
 export enum TrainingFrequency {
-  NoneOrRarely = "No entreno o menos de 2 veces por semana", // Factor: 1.3 (Ligera)
-  TwoToThree = "2-3 veces por semana", // Factor: 1.3 (Ligera)
-  FourTimes = "4 veces por semana",    // Factor: 1.5 (Moderada)
-  FiveToSix = "5-6 veces por semana",  // Factor: 1.8 (Alta)
-  DailyOrMore = "7 o más veces por semana (diario o más)" // Factor: 2.0 (Muy Alta)
+  NoneOrRarely = "No entreno o menos de 2 veces por semana", 
+  TwoToThree = "2-3 veces por semana", 
+  FourTimes = "4 veces por semana",    
+  FiveToSix = "5-6 veces por semana",  
+  DailyOrMore = "7 o más veces por semana (diario o más)" 
 }
 
 export enum PersonalGoal {

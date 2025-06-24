@@ -1,12 +1,15 @@
 
-
 import React from 'react';
 import { Message } from '../types';
 import { MarkdownRenderer } from './MarkdownRenderer';
-import { UserIcon, NutriKickIcon } from './Icons';
+import { UserIcon, NutriKickIcon } from './Icons'; 
 
 interface ChatMessageProps {
   message: Message;
+}
+
+const isImageDataURI = (text: string): boolean => {
+  return text.startsWith('data:image');
 }
 
 export const ChatMessage: React.FC<ChatMessageProps> = ({ message }) => {
@@ -18,9 +21,17 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({ message }) => {
         <div className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center mt-1 ${isUser ? 'bg-sky-600' : 'bg-slate-800'} shadow-md`}>
           {isUser ? <UserIcon className="w-5 h-5 text-white" /> : <NutriKickIcon className="text-2xl" />}
         </div>
-        <div className={`px-4 py-3 rounded-xl shadow-md ${isUser ? 'bg-sky-600 text-white rounded-br-none' : 'bg-slate-600 text-slate-100 rounded-bl-none'}`}>
+        <div className={`relative px-4 py-3 rounded-xl shadow-md ${isUser ? 'bg-sky-600 text-white rounded-br-none' : 'bg-slate-600 text-slate-100 rounded-bl-none'}`}>
           {isUser ? (
-            <p className="text-sm break-words">{message.text}</p>
+            isImageDataURI(message.text) ? (
+              <img 
+                src={message.text} 
+                alt="Imagen enviada por el usuario" 
+                className="max-w-xs max-h-60 rounded-md object-contain" // Constrain image size
+              />
+            ) : (
+              <p className="text-sm break-words">{message.text}</p>
+            )
           ) : (
             <MarkdownRenderer markdown={message.text} />
           )}
