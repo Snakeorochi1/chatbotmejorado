@@ -12,7 +12,7 @@ import { UserProfile } from '../types';
 // const YOUR_SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXV....";
 // =====================================================================================
 const YOUR_SUPABASE_URL: string = "https://ztqdbvpcfutknsxtqfwu.supabase.co";
-const YOUR_SUPABASE_ANON_KEY: string = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inp0cWRidnBjZnV0a25zeHRxZnd1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTA3ODE1NTAsImV4cCI6MjA2NjM1NzU1MH0.8M_GZ2xbiTrNttqpaffHZ-IVDkZ6dp1DI2Ft3Bz7hoE";
+const YOUR_SUPABASE_ANON_KEY: string = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inp0cWRidnBjZnV0a25zeHRxZnd1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTA3ODE1NTAsImV4cCI6MjA2NjM1NzU1MH0.8M_GZ2xbiTrNttqpaffHZ-IVDkZ6dp1DI2Ft3Bz7ho";
 // =====================================================================================
 
 let supabase: SupabaseClient | null = null;
