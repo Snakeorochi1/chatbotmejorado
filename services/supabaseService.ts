@@ -1,6 +1,7 @@
 
+
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import { UserProfile } from '../types';
+import { UserProfile, SportsDiscipline, DietaryApproachOptions, DietaryRestrictionOptions } from '../types'; // Added SportsDiscipline
 
 // =====================================================================================
 // ¡CONFIGURACIÓN REQUERIDA POR EL USUARIO!
@@ -12,7 +13,7 @@ import { UserProfile } from '../types';
 // const YOUR_SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXV....";
 // =====================================================================================
 const YOUR_SUPABASE_URL: string = "https://ztqdbvpcfutknsxtqfwu.supabase.co";
-const YOUR_SUPABASE_ANON_KEY: string = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inp0cWRidnBjZnV0a25zeHRxZnd1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTA3ODE1NTAsImV4cCI6MjA2NjM1NzU1MH0.8M_GZ2xbiTrNttqpaffHZ-IVDkZ6dp1DI2Ft3Bz7ho";
+const YOUR_SUPABASE_ANON_KEY: string = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inp0cWRidnBjZnV0a25zeHRxZnd1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTA3ODE1NTAsImV4cCI6MjA2NjM1NzU1MH0.8M_GZ2xbiTrNttqpaffHZ-IVDkZ6dp1DI2Ft3Bz7hoE";
 // =====================================================================================
 
 let supabase: SupabaseClient | null = null;
@@ -69,7 +70,7 @@ export const getSupabaseClientStatus = (): SupabaseServiceStatus => {
   };
 };
 
-const SUPABASE_USER_PROFILE_ROW_ID_KEY = 'nutrikick_supabase_profile_row_id';
+const SUPABASE_USER_PROFILE_ROW_ID_KEY = 'nutrikick_supabase_profile_row_id_v3';
 
 const getOrCreateSupabaseProfileRowId = (): string => {
   if (typeof localStorage === 'undefined') {
@@ -86,6 +87,8 @@ const getOrCreateSupabaseProfileRowId = (): string => {
 };
 
 const mapProfileToSupabaseSchema = (profile: UserProfile, id: string): any => {
+  const sportsDisciplineValue = profile.sportsDiscipline || null;
+
   return {
     id: id, 
     name: profile.name || null,
@@ -96,10 +99,29 @@ const mapProfileToSupabaseSchema = (profile: UserProfile, id: string): any => {
     height: profile.height || null, 
     gender: profile.gender || null,
     is_athlete: profile.isAthlete || false,
+    
+    sports_discipline: profile.isAthlete ? sportsDisciplineValue : null,
+    custom_sports_discipline: null, 
     position: profile.isAthlete ? (profile.position || null) : null,
     training_load: profile.isAthlete ? (profile.trainingLoad || null) : null,
+    athletic_goals: profile.isAthlete && profile.athleticGoals && profile.athleticGoals.length > 0 ? profile.athleticGoals : null,
+
     training_frequency: !profile.isAthlete ? (profile.trainingFrequency || null) : null,
+    
     goals: profile.goals || null,
+    // Updated dietary fields mapping
+    dietary_approaches: profile.dietaryApproaches && profile.dietaryApproaches.length > 0 ? profile.dietaryApproaches : null,
+    dietary_restrictions: profile.dietaryRestrictions && profile.dietaryRestrictions.length > 0 ? profile.dietaryRestrictions : null,
+    
+    current_supplement_usage: profile.currentSupplementUsage || null,
+    supplement_interest_or_usage_details: profile.supplementInterestOrUsageDetails || null,
+    wellness_focus_areas: profile.wellnessFocusAreas && profile.wellnessFocusAreas.length > 0 ? profile.wellnessFocusAreas : null,
+    mood_today: profile.moodToday || null,
+    trained_today: profile.trainedToday || null,
+    had_breakfast: profile.hadBreakfast || null,
+    energy_level: profile.energyLevel || null,
+    last_check_in_timestamp: profile.lastCheckInTimestamp ? new Date(profile.lastCheckInTimestamp).toISOString() : null,
+
     last_updated_at: new Date().toISOString(), 
   };
 };
@@ -122,11 +144,10 @@ export const saveUserProfileToSupabase = async (userProfile: UserProfile): Promi
   const profileDataForSupabase = mapProfileToSupabaseSchema(userProfile, rowId);
 
   try {
-    // The 'error' object from Supabase contains details about the RLS failure.
     const { data, error } = await supabase
-      .from('user_profiles')
+      .from('user_profiles') 
       .upsert([profileDataForSupabase], { onConflict: 'id' })
-      .select(); // Adding .select() can sometimes provide more context or ensure the operation completes.
+      .select(); 
 
     if (error) {
       console.error(`Error saving user profile to Supabase (rowId: ${rowId}). Supabase error object:`, JSON.stringify(error, null, 2));

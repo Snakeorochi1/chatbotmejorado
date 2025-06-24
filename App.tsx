@@ -1,15 +1,19 @@
 
 import React, { useState, useCallback, useEffect, useRef } from 'react';
-import { UserProfile, Message, Gender, FootballPosition, TrainingLoad, TrainingFrequency, PersonalGoal } from './types';
-import { generateNutriKickResponse } from './services/geminiService';
-import { saveUserProfileToSupabase, getSupabaseClientStatus } from './services/supabaseService'; // Supabase integration
+import { UserProfile, Message, Gender, FootballPosition, TrainingLoad, TrainingFrequency, PersonalGoal, DailyIntake, NutrientTargets, EstimatedFoodIntake, SportsDiscipline, AthleticGoalOptions, DietaryApproachOptions, DietaryRestrictionOptions } from './types';
+import { generateNutriKickResponse, GeminiServiceResponse } from './services/geminiService';
+import { saveUserProfileToSupabase, getSupabaseClientStatus } from './services/supabaseService';
 import { ProfileEditor } from './components/ProfileEditor';
 import { ChatWindow } from './components/ChatWindow';
 import { DISCLAIMER_TEXT } from './constants';
 import { LogoIcon, ProfileIcon, ChatIcon } from './components/Icons';
+import { calculateIdealBodyWeightRange, calculateMacronutrientTargets } from './nutritionCalculators';
 
-const USER_PROFILE_STORAGE_KEY = 'nutrikick_userProfile';
-const CHAT_MESSAGES_STORAGE_KEY = 'nutrikick_chatMessages';
+const USER_PROFILE_STORAGE_KEY = 'nutrikick_userProfile_v3'; 
+const CHAT_MESSAGES_STORAGE_KEY = 'nutrikick_chatMessages_v2';
+const DAILY_INTAKE_STORAGE_KEY = 'nutrikick_dailyIntake_v2';
+const NUTRIENT_TARGETS_STORAGE_KEY = 'nutrikick_nutrientTargets_v2';
+
 
 const initialDefaultUserProfile: UserProfile = {
   name: '',
@@ -20,14 +24,49 @@ const initialDefaultUserProfile: UserProfile = {
   height: '',
   gender: "",
   isAthlete: false,
-  trainingFrequency: TrainingFrequency.NoneOrRarely,
-  position: FootballPosition.Versatile,
+  sportsDiscipline: undefined, 
+  customSportsDiscipline: '', 
+  position: '', 
   trainingLoad: TrainingLoad.LightTraining,
+  athleticGoals: [], 
+  trainingFrequency: TrainingFrequency.NoneOrRarely,
   goals: "" as PersonalGoal | "",
+  dietaryApproaches: [], // New
+  dietaryRestrictions: [], // New
+  currentSupplementUsage: "Prefiero no decirlo",
+  supplementInterestOrUsageDetails: '',
+  wellnessFocusAreas: [],
+  moodToday: '',
+  trainedToday: '',
+  hadBreakfast: '',
+  energyLevel: '',
+  lastCheckInTimestamp: undefined,
 };
 
-const INITIAL_WELCOME_MESSAGE_TEXT = "¡Hola! 👋 Soy Nutri-Kick AI. Para poder ayudarte de la mejor manera y personalizar mis consejos, necesito conocerte un poco. **Por favor, haz clic en el icono del perfil (que parece una silueta de persona 👤) en la esquina superior derecha para completar tus datos.** Una vez que tu perfil esté actualizado, podré calcular tus necesidades calóricas estimadas y responder a todas tus preguntas sobre nutrición deportiva. También puedes usar el micrófono 🎤 o la cámara 📸 para interactuar. ¿Comenzamos? 🚀";
+const INITIAL_WELCOME_MESSAGE_TEXT = "¡Hola! 👋 Soy Nutri-Kick AI. Para poder ayudarte de la mejor manera y personalizar mis consejos, necesito conocerte un poco. **Por favor, haz clic en el icono del perfil (👤) en la esquina superior derecha para completar tus datos.** Una vez que tu perfil esté actualizado, podré calcular tus necesidades calóricas estimadas, tus objetivos de macronutrientes y ayudarte a registrar tus comidas. También puedes usar el micrófono 🎤 o la cámara 📸 para interactuar. ¿Comenzamos? 🚀";
 
+const getTodayDateString = (): string => {
+  const today = new Date();
+  const year = today.getFullYear();
+  const month = (today.getMonth() + 1).toString().padStart(2, '0');
+  const day = today.getDate().toString().padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const initialDefaultDailyIntake: DailyIntake = {
+  date: getTodayDateString(),
+  caloriesConsumed: 0,
+  proteinConsumed: 0,
+  carbsConsumed: 0,
+  fatsConsumed: 0,
+};
+
+const initialDefaultNutrientTargets: NutrientTargets = {
+  calories: null,
+  protein: null,
+  carbs: null,
+  fats: null,
+};
 
 function blobToBase64(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -61,29 +100,19 @@ function getSupportedMimeType(): string | undefined {
     return undefined; 
 }
 
-const stripSpeakTags = (text: string): string => {
-  let cleanedText = text;
-  cleanedText = cleanedText.replace(/<speak_ack>.*?<\/speak_ack>/gs, '').trim();
-  cleanedText = cleanedText.replace(/<speak_next_q>.*?<\/speak_next_q>/gs, '').trim();
-  return cleanedText.replace(/\n\s*\n/g, '\n'); 
-};
-
 const App: React.FC = () => {
-  const isInitialProfileLoad = useRef(true);
-  const isInitialMessagesLoad = useRef(true);
+  const isInitialLoad = useRef(true);
 
   const [userProfile, setUserProfile] = useState<UserProfile>(() => {
     try {
       const storedProfile = localStorage.getItem(USER_PROFILE_STORAGE_KEY);
       if (storedProfile) {
         const parsedProfile = JSON.parse(storedProfile);
-        const finalProfile = { ...initialDefaultUserProfile };
-        for (const key of Object.keys(initialDefaultUserProfile) as Array<keyof UserProfile>) {
-          if (parsedProfile.hasOwnProperty(key) && parsedProfile[key] !== undefined) {
-            (finalProfile as any)[key] = parsedProfile[key];
-          }
-        }
-        return finalProfile;
+        // Ensure new fields exist if loading old profile structure
+        if (!parsedProfile.dietaryApproaches) parsedProfile.dietaryApproaches = [];
+        if (!parsedProfile.dietaryRestrictions) parsedProfile.dietaryRestrictions = [];
+        delete parsedProfile.dietaryPreferencesAndRestrictions; // Remove old field
+        return { ...initialDefaultUserProfile, ...parsedProfile };
       }
     } catch (error) { console.error("Error loading user profile from localStorage:", error); }
     return { ...initialDefaultUserProfile };
@@ -100,9 +129,35 @@ const App: React.FC = () => {
     return [];
   });
 
+  const [dailyIntake, setDailyIntake] = useState<DailyIntake>(() => {
+    try {
+      const storedIntake = localStorage.getItem(DAILY_INTAKE_STORAGE_KEY);
+      if (storedIntake) {
+        const parsedIntake: DailyIntake = JSON.parse(storedIntake);
+        if (parsedIntake.date === getTodayDateString()) {
+          return parsedIntake;
+        }
+      }
+    } catch (error) { console.error("Error loading daily intake from localStorage:", error); }
+    return { ...initialDefaultDailyIntake }; 
+  });
+
+  const [nutrientTargets, setNutrientTargets] = useState<NutrientTargets>(() => {
+    try {
+      const storedTargets = localStorage.getItem(NUTRIENT_TARGETS_STORAGE_KEY);
+      if (storedTargets) {
+        return JSON.parse(storedTargets);
+      }
+    } catch (error) { console.error("Error loading nutrient targets from localStorage:", error); }
+    return { ...initialDefaultNutrientTargets };
+  });
+  
+  const [currentBMR, setCurrentBMR] = useState<number | null>(null);
+  const [currentTDEE, setCurrentTDEE] = useState<number | null>(null);
+
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null); 
   const [activeTab, setActiveTab] = useState<'chat' | 'profile'>('chat');
 
   const [isRecording, setIsRecording] = useState(false);
@@ -126,26 +181,67 @@ const App: React.FC = () => {
   const [dbErrorDetails, setDbErrorDetails] = useState<string | null>(null);
 
   useEffect(() => {
-    // Check Supabase client status
     const supabaseStatus = getSupabaseClientStatus();
     if (!supabaseStatus.clientInitialized) {
-        console.error("App.tsx: Supabase client not initialized by supabaseService.", supabaseStatus.error);
+        console.error("App.tsx: Supabase client not initialized.", supabaseStatus.error);
         setDbStatus('error');
-        setDbErrorDetails(supabaseStatus.detailedMessage || `Error fatal: El cliente Supabase no se pudo inicializar. Revisa supabaseService.ts y la consola.`);
+        setDbErrorDetails(supabaseStatus.detailedMessage || `Error fatal: El cliente Supabase no se pudo inicializar.`);
     } else {
-        console.log("%cApp.tsx: Supabase client appears initialized.", "color: green; font-weight: bold;");
-        setDbStatus('ok'); // Assume OK if client initialized. Further checks could be added.
+        setDbStatus('ok');
         setDbErrorDetails(null);
     }
+
+    if (dailyIntake.date !== getTodayDateString()) {
+        console.log("Date changed, resetting daily intake.");
+        setDailyIntake({ ...initialDefaultDailyIntake, date: getTodayDateString() });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); 
+
+  const handleProfileEditingComplete = useCallback(() => {
+    setActiveTab('chat');
+    setTimeout(() => chatContainerRef.current?.scrollTo(0, 0), 0);
   }, []);
 
+  const handleProfileUpdate = useCallback(async (updatedProfileFromEditor: UserProfile, isMainUpdate: boolean) => {
+    const oldProfile = userProfile; 
+    let profileToSave = { ...updatedProfileFromEditor };
 
-  const handleProfileUpdate = useCallback(async (newProfile: UserProfile) => {
-    setUserProfile(newProfile); setError(null); setSuccessMessage(null);
+    if (profileToSave.isAthlete && profileToSave.sportsDiscipline === SportsDiscipline.Other && profileToSave.customSportsDiscipline?.trim()) {
+      profileToSave.sportsDiscipline = profileToSave.customSportsDiscipline.trim();
+    }
+    profileToSave.customSportsDiscipline = (profileToSave.sportsDiscipline === SportsDiscipline.Other && profileToSave.customSportsDiscipline) 
+                                            ? profileToSave.customSportsDiscipline 
+                                            : '';
+
+
+    if (isMainUpdate) {
+        profileToSave.lastCheckInTimestamp = oldProfile.lastCheckInTimestamp; 
+    } else { 
+        let dailyCheckInFieldsActuallyModified = false;
+        if (profileToSave.moodToday !== oldProfile.moodToday ||
+            profileToSave.trainedToday !== oldProfile.trainedToday ||
+            profileToSave.hadBreakfast !== oldProfile.hadBreakfast ||
+            profileToSave.energyLevel !== oldProfile.energyLevel) {
+              dailyCheckInFieldsActuallyModified = true;
+        }
+        
+        if (dailyCheckInFieldsActuallyModified) {
+            if (profileToSave.moodToday || profileToSave.trainedToday || profileToSave.hadBreakfast || profileToSave.energyLevel) {
+                profileToSave.lastCheckInTimestamp = Date.now();
+            } else { 
+                profileToSave.lastCheckInTimestamp = undefined; 
+            }
+        } else {
+            profileToSave.lastCheckInTimestamp = oldProfile.lastCheckInTimestamp;
+        }
+    }
+
+    setUserProfile(profileToSave); 
+    setError(null); 
+
     try {
-      await saveUserProfileToSupabase(newProfile); // Use Supabase service
-      setSuccessMessage("¡Perfil guardado en la nube (Supabase) con éxito! ☁️");
-      setTimeout(() => setSuccessMessage(null), 5000);
+      await saveUserProfileToSupabase(profileToSave);
     } catch (dbError) {
       console.error("Failed to save profile to Supabase:", dbError);
       const message = dbError instanceof Error ? dbError.message : "Error desconocido al guardar en base de datos.";
@@ -153,126 +249,225 @@ const App: React.FC = () => {
       setTimeout(() => setError(null), 7000);
     }
     
-    // Recalculate BMR/TDEE and generate AI message (logic remains the same)
-    let bmr: number | null = null;
-    let tdee: number | null = null;
-    let activityLevelName = "No especificado";
-    let activityFactor = 1.2; 
-    const ageNum = parseInt(newProfile.age);
-    const weightNum = parseFloat(newProfile.weight);
-    const heightNum = parseInt(newProfile.height);
-    let calculationMessage = `¡Perfil de ${newProfile.name || 'usuario'} actualizado! 🎉\n\n`;
+    if (isMainUpdate) {
+        let bmr: number | null = null;
+        let tdee: number | null = null;
+        let activityLevelName = "No especificado";
+        let activityFactor = 1.2; 
+        const ageNum = parseInt(profileToSave.age);
+        const weightNum = parseFloat(profileToSave.weight);
+        const heightNum = parseInt(profileToSave.height);
+        let calculationMessage = `¡Perfil de ${profileToSave.name || 'usuario'} actualizado! 🎉\n\n`;
 
-    if (isNaN(ageNum) || isNaN(weightNum) || isNaN(heightNum) || ageNum <= 0 || weightNum <= 0 || heightNum <= 0) {
-      calculationMessage += "Por favor, completa tu edad, peso y altura con valores válidos para calcular tus necesidades energéticas. 🙏\n\n";
-    } else if (heightNum < 60) { 
-      calculationMessage += "**¡Atención Especial por Estatura!** 📏\n";
-      calculationMessage += "Debido a que la estatura ingresada es menor a 60 cm, los cálculos estándar de requerimientos calóricos pueden no ser precisos. Es esencial la evaluación y el consejo directo de un profesional de la salud (médico o nutricionista).\n\n";
-      calculationMessage += "Por tu bienestar, no se mostrarán cálculos de MB o RCTE ni consejos específicos. Te insto a buscar asesoramiento profesional.\n";
-    } else if (ageNum < 18) { 
+        if (isNaN(ageNum) || isNaN(weightNum) || isNaN(heightNum) || ageNum <= 0 || weightNum <= 0 || heightNum <= 0) {
+        calculationMessage += "Por favor, completa tu edad, peso y altura con valores válidos para calcular tus necesidades energéticas. 🙏\n\n";
+        setCurrentBMR(null); setCurrentTDEE(null); setNutrientTargets(initialDefaultNutrientTargets);
+        } else if (heightNum < 60) { 
+        calculationMessage += "**¡Atención Especial por Estatura!** 📏\n";
+        calculationMessage += "Debido a que la estatura ingresada es menor a 60 cm, los cálculos estándar de requerimientos calóricos pueden no ser precisos y no se realizarán. Te recomiendo consultar a un profesional de la salud o nutricionista para obtener una evaluación adecuada, especialmente si esta estatura es correcta. Si fue un error, por favor, corrígela en tu perfil.\n\n";
+        setCurrentBMR(null); setCurrentTDEE(null); setNutrientTargets(initialDefaultNutrientTargets);
+        } else if (ageNum < 18) { 
+            calculationMessage += `Aquí tienes un resumen de tus necesidades estimadas:\n`;
+            if (profileToSave.gender === Gender.Male) bmr = (10 * weightNum) + (6.25 * heightNum) - (5 * ageNum) + 5;
+            else if (profileToSave.gender === Gender.Female) bmr = (10 * weightNum) + (6.25 * heightNum) - (5 * ageNum) - 161;
+            
+            if (bmr && bmr > 0) {
+                if (profileToSave.isAthlete) activityFactor = 1.5; else activityFactor = 1.4; 
+                tdee = bmr * activityFactor;
+            }
+            calculationMessage += `*   **Metabolismo Basal (MB) Estimado:** ${bmr && bmr > 0 ? bmr.toFixed(0) : 'N/A'} kcal/día 🔥\n`;
+            calculationMessage += `*   **Requerimiento Calórico Total Estimado (RCTE):** ${tdee && tdee > 0 ? tdee.toFixed(0) : 'N/A'} kcal/día 🎯\n\n`;
+            calculationMessage += "**¡Atención Especial por Edad!** 🧑‍⚕️\n";
+            calculationMessage += "Dado que eres menor de 18 años, es CRUCIAL que cualquier plan nutricional o cambio significativo en tu dieta o ejercicio sea supervisado de cerca por tus padres o tutores y un profesional de la salud (médico o nutricionista pediátrico/deportivo). Mis cálculos son solo estimaciones generales y no deben reemplazar el consejo profesional personalizado. ¡Tu salud y desarrollo son lo más importante!\n\n";
+            setCurrentBMR(bmr); setCurrentTDEE(tdee);
+            const targets = calculateMacronutrientTargets(profileToSave, tdee);
+            setNutrientTargets(targets);
+            if (targets.calories && targets.protein && targets.carbs && targets.fats) {
+                calculationMessage += `Tus objetivos aproximados de macronutrientes diarios (que deben ser validados y ajustados por un profesional) podrían ser: Proteína: ${targets.protein.toFixed(0)}g, Carbohidratos: ${targets.carbs.toFixed(0)}g, Grasas: ${targets.fats.toFixed(0)}g.\n\n`;
+            }
+        } else if (profileToSave.gender === Gender.Male || profileToSave.gender === Gender.Female) {
+        if (profileToSave.gender === Gender.Male) bmr = (10 * weightNum) + (6.25 * heightNum) - (5 * ageNum) + 5;
+        else bmr = (10 * weightNum) + (6.25 * heightNum) - (5 * ageNum) - 161;
+
+        if (profileToSave.isAthlete && profileToSave.trainingLoad) {
+            switch (profileToSave.trainingLoad) { 
+            case TrainingLoad.RestDay: activityFactor = 1.2; activityLevelName = "Día de Descanso 😴"; break;
+            case TrainingLoad.LightTraining: activityFactor = 1.375; activityLevelName = "Entrenamiento Ligero 👟"; break;
+            case TrainingLoad.ModerateTraining: activityFactor = 1.55; activityLevelName = "Entrenamiento Moderado 💪"; break;
+            case TrainingLoad.IntenseTraining: activityFactor = 1.725; activityLevelName = "Entrenamiento Intenso 🔥"; break;
+            case TrainingLoad.MatchDay: activityFactor = 1.9; activityLevelName = "Día de Partido 🏆"; break;
+            default: activityFactor = 1.55; activityLevelName = "Actividad Moderada (Atleta)"; 
+            }
+        } else if (!profileToSave.isAthlete && profileToSave.trainingFrequency) { 
+            switch (profileToSave.trainingFrequency) {
+            case TrainingFrequency.NoneOrRarely: activityFactor = 1.3; activityLevelName = "Actividad Ligera (0-1 entrenamientos/sem) 🚶"; break;
+            case TrainingFrequency.TwoToThree: activityFactor = 1.4; activityLevelName = "Actividad Ligera (2-3 entrenamientos/sem) 🚶‍♀️"; break; 
+            case TrainingFrequency.FourTimes: activityFactor = 1.5; activityLevelName = "Actividad Moderada (4 entrenamientos/sem) 🏃"; break;
+            case TrainingFrequency.FiveToSix: activityFactor = 1.7; activityLevelName = "Actividad Alta (5-6 entrenamientos/sem) 🏋️‍♀️"; break; 
+            case TrainingFrequency.DailyOrMore: activityFactor = 1.9; activityLevelName = "Actividad Muy Alta (7+ entrenamientos/sem) 🚀"; break; 
+            }
+        }
+        if (bmr) tdee = bmr * activityFactor;
+        setCurrentBMR(bmr); setCurrentTDEE(tdee);
+        const targets = calculateMacronutrientTargets(profileToSave, tdee);
+        setNutrientTargets(targets);
+
         calculationMessage += `Aquí tienes un resumen de tus necesidades estimadas:\n`;
-        if (newProfile.gender === Gender.Male) {
-            bmr = (10 * weightNum) + (6.25 * heightNum) - (5 * ageNum) + 5;
-        } else if (newProfile.gender === Gender.Female) {
-            bmr = (10 * weightNum) + (6.25 * heightNum) - (5 * ageNum) - 161;
+        calculationMessage += `*   **Metabolismo Basal (MB):** ${bmr ? bmr.toFixed(0) : 'N/A'} kcal/día 🔥\n`;
+        calculationMessage += `*   **Requerimiento Calórico Total Estimado (RCTE):** ${tdee ? tdee.toFixed(0) : 'N/A'} kcal/día (basado en MB y tu actividad: ${activityLevelName})🎯\n`;
+        if (targets.calories && targets.protein && targets.carbs && targets.fats) {
+            calculationMessage += `*   **Objetivos de Macronutrientes:** Proteína: ~${targets.protein.toFixed(0)}g, Carbohidratos: ~${targets.carbs.toFixed(0)}g, Grasas: ~${targets.fats.toFixed(0)}g diarios.\n\n`;
+        } else { calculationMessage += `\n`;}
+        calculationMessage += `Considerando tu objetivo "${profileToSave.goals}", estos valores son el punto de partida. \n\n`;
+        
+        let goalSpecificAdvice = "";
+        switch (profileToSave.goals) {
+            case PersonalGoal.LoseWeightHealthy: goalSpecificAdvice = "Para 'Perder peso de forma saludable', usualmente se busca un déficit calórico moderado. ¿Te gustaría explorar estrategias?\n\n"; break;
+            case PersonalGoal.GainMuscleImproveComposition: goalSpecificAdvice = `Para 'Aumentar masa muscular y mejorar composición corporal', un ligero superávit calórico y alcanzar tu objetivo de proteínas (~${targets.protein?.toFixed(0)}g) son claves. ¿Exploramos cómo?\n\n`; break;
+            default: goalSpecificAdvice = `Para tu objetivo de '${profileToSave.goals}', podemos explorar estrategias. ¿Algún aspecto en particular?\n\n`; break;
         }
-        if (bmr && bmr > 0) {
-             if (newProfile.isAthlete) { activityFactor = 1.5; } 
-             else { activityFactor = 1.4; } 
-             tdee = bmr * activityFactor;
+        calculationMessage += goalSpecificAdvice;
+        } else {
+        calculationMessage += "Para un cálculo más preciso, selecciona 'Masculino' o 'Femenino' en género.\n\n";
+        setCurrentBMR(null); setCurrentTDEE(null); setNutrientTargets(initialDefaultNutrientTargets);
         }
-        calculationMessage += `*   **Metabolismo Basal (MB) Estimado:** ${bmr && bmr > 0 ? bmr.toFixed(0) : 'N/A'} kcal/día 🔥\n`;
-        calculationMessage += `*   **Requerimiento Calórico Total Estimado (RCTE):** ${tdee && tdee > 0 ? tdee.toFixed(0) : 'N/A'} kcal/día 🎯\n\n`;
-        calculationMessage += "**¡Atención Especial por Edad!** 🧑‍⚕️\n";
-        calculationMessage += "Dado que eres menor de 18 años, es CRUCIAL que cualquier plan nutricional o de entrenamiento sea supervisado directamente por un médico y un nutricionista deportivo, en conjunto con tus padres o tutores. Mis cálculos (MB y RCTE) son estimaciones generales y no pueden reemplazar una evaluación profesional detallada, que es esencial para asegurar tu crecimiento y desarrollo saludable. Por favor, discute tus objetivos y esta información con ellos.\n\n";
-        calculationMessage += "Como inteligencia artificial, mi prioridad es tu bienestar, y por ello no puedo ofrecerte consejos nutricionales detallados ni sugerencias específicas para tus objetivos a esta edad. ¡Habla con los profesionales y tus padres!\n";
-    } else if (newProfile.gender === Gender.Male || newProfile.gender === Gender.Female) {
-      if (newProfile.gender === Gender.Male) {
-        bmr = (10 * weightNum) + (6.25 * heightNum) - (5 * ageNum) + 5;
-      } else { 
-        bmr = (10 * weightNum) + (6.25 * heightNum) - (5 * ageNum) - 161;
-      }
 
-      if (newProfile.isAthlete && newProfile.trainingLoad) {
-        switch (newProfile.trainingLoad) {
-          case TrainingLoad.RestDay: activityFactor = 1.2; activityLevelName = "Día de Descanso 😴"; break;
-          case TrainingLoad.LightTraining: activityFactor = 1.375; activityLevelName = "Entrenamiento Ligero 👟"; break;
-          case TrainingLoad.IntenseTraining: activityFactor = 1.725; activityLevelName = "Entrenamiento Intenso 💪"; break;
-          case TrainingLoad.MatchDay: activityFactor = 1.9; activityLevelName = "Día de Partido 🏆"; break;
+        const newAiCalcMessage: Message = { id: crypto.randomUUID(), sender: 'ai', text: calculationMessage.trim(), timestamp: new Date() };
+        setMessages(prev => {
+        const filteredMessages = prev.filter(m => m.text !== INITIAL_WELCOME_MESSAGE_TEXT);
+        const updatedMessages = [newAiCalcMessage, ...filteredMessages];
+        if (activeTab === 'chat' || (filteredMessages.length === 0 && prev.length === 1 && prev[0].text === INITIAL_WELCOME_MESSAGE_TEXT)) {
+            setTimeout(() => chatContainerRef.current?.scrollTo(0, 0), 0);
         }
-      } else if (!newProfile.isAthlete && newProfile.trainingFrequency) { 
-        switch (newProfile.trainingFrequency) {
-          case TrainingFrequency.NoneOrRarely: activityFactor = 1.3; activityLevelName = "Actividad Ligera (0-1 entrenamientos/sem) 🚶"; break;
-          case TrainingFrequency.TwoToThree: activityFactor = 1.4; activityLevelName = "Actividad Ligera (2-3 entrenamientos/sem) 🚶‍♀️"; break; 
-          case TrainingFrequency.FourTimes: activityFactor = 1.5; activityLevelName = "Actividad Moderada (4 entrenamientos/sem) 🏃"; break;
-          case TrainingFrequency.FiveToSix: activityFactor = 1.7; activityLevelName = "Actividad Alta (5-6 entrenamientos/sem) 🏋️‍♀️"; break; 
-          case TrainingFrequency.DailyOrMore: activityFactor = 1.9; activityLevelName = "Actividad Muy Alta (7+ entrenamientos/sem) 🚀"; break; 
-        }
-      }
-      if (bmr) tdee = bmr * activityFactor;
+        return updatedMessages;
+        });
+    } 
+   
+  // eslint-disable-next-line react-hooks/exhaustive-deps 
+  }, [userProfile, activeTab]); 
 
-      calculationMessage += `Aquí tienes un resumen de tus necesidades estimadas:\n`;
-      calculationMessage += `*   **Metabolismo Basal (MB):** ${bmr.toFixed(0)} kcal/día 🔥\n`;
-      calculationMessage += `*   **Requerimiento Calórico Total Estimado (RCTE):** ${tdee ? tdee.toFixed(0) : 'N/A'} kcal/día (basado en MB y tu actividad: ${activityLevelName})🎯\n\n`;
-      calculationMessage += `Considerando tu objetivo de "${newProfile.goals}", estos valores son el punto de partida para planificar tu ingesta. \n\n`;
-      let goalSpecificAdvice = "";
-      switch (newProfile.goals) {
-        case PersonalGoal.LoseWeight:
-          goalSpecificAdvice = "Para tu objetivo de 'Perder peso', generalmente se busca un déficit calórico. Es fundamental que esta pérdida sea de grasa, protegiendo tu masa muscular. ¿Te gustaría que te explique más sobre esto o cómo se podría distribuir tu comida de forma general?\n\n" +
-          "**Importante:** Una pérdida de peso mal planificada puede ser perjudicial. Un nutricionista deportivo es clave para un plan seguro y efectivo.\n\n";
-          break;
-        case PersonalGoal.GainMuscle:
-          goalSpecificAdvice = "Para ganar músculo, un ligero superávit calórico y suficiente proteína son claves. ¿Quieres que veamos algunas pautas generales sobre esto?\n\n";
-          break;
-        case PersonalGoal.MaintainAndPerform:
-          goalSpecificAdvice = "Para mantener peso y mejorar rendimiento, la calidad y el timing de nutrientes son cruciales. ¿Te interesa saber más sobre cómo optimizar tu energía y recuperación?\n\n";
-          break;
-        default: goalSpecificAdvice = `Para tu objetivo de '${newProfile.goals}', podemos explorar estrategias específicas. ¿Hay algún aspecto en particular sobre el que te gustaría que conversemos, como tipos de alimentos o momentos para comer?\n\n`; break;
-      }
-      calculationMessage += goalSpecificAdvice;
-    } else {
-      calculationMessage += "Para un cálculo más preciso, selecciona 'Masculino' o 'Femenino' en género.\n\n";
+
+  const processAiResponseWithPlaceholders = (
+    baseText: string,
+    mealEstimate?: EstimatedFoodIntake,
+    updatedDailyIntake?: DailyIntake,
+    currentTargets?: NutrientTargets,
+    currentProfile?: UserProfile
+  ): string => {
+    let processedText = baseText;
+    const todayIntake = updatedDailyIntake || dailyIntake;
+    const targets = currentTargets || nutrientTargets;
+    const profile = currentProfile || userProfile;
+
+    if (mealEstimate) {
+        processedText = processedText.replace(/\[LOGGED_FOOD_DESCRIPTION_PLACEHOLDER\]/g, mealEstimate.foodDescription);
+        processedText = processedText.replace(/\[MEAL_CALORIES_ESTIMATED_PLACEHOLDER\]/g, mealEstimate.calories.toFixed(0));
+        processedText = processedText.replace(/\[MEAL_PROTEIN_ESTIMATED_PLACEHOLDER\]/g, mealEstimate.protein.toFixed(0));
+        processedText = processedText.replace(/\[MEAL_CARBS_ESTIMATED_PLACEHOLDER\]/g, mealEstimate.carbs.toFixed(0));
+        processedText = processedText.replace(/\[MEAL_FATS_ESTIMATED_PLACEHOLDER\]/g, mealEstimate.fats.toFixed(0));
+    } else { 
+        processedText = processedText.replace(/Okay, he anotado tu.*?para esta comida:\n\n/s, ""); 
+        processedText = processedText.replace(/\[LOGGED_FOOD_DESCRIPTION_PLACEHOLDER\]/g, "tu comida");
+        processedText = processedText.replace(/\[MEAL_CALORIES_ESTIMATED_PLACEHOLDER\]/g, "N/A");
+        processedText = processedText.replace(/\[MEAL_PROTEIN_ESTIMATED_PLACEHOLDER\]/g, "N/A");
+        processedText = processedText.replace(/\[MEAL_CARBS_ESTIMATED_PLACEHOLDER\]/g, "N/A");
+        processedText = processedText.replace(/\[MEAL_FATS_ESTIMATED_PLACEHOLDER\]/g, "N/A");
     }
 
-    const newAiCalcMessage: Message = { id: crypto.randomUUID(), sender: 'ai', text: calculationMessage.trim(), timestamp: new Date() };
-    setMessages(prev => [newAiCalcMessage, ...prev.filter(m => m.text !== INITIAL_WELCOME_MESSAGE_TEXT)]);
-    setActiveTab('chat');
-    setTimeout(() => {
-      if (chatContainerRef.current) {
-        chatContainerRef.current.scrollTop = 0;
-      }
-    }, 0);
-  }, [chatContainerRef]);
+    processedText = processedText.replace(/\[DAILY_CALORIES_CONSUMED_PLACEHOLDER\]/g, todayIntake.caloriesConsumed.toFixed(0));
+    processedText = processedText.replace(/\[TARGET_CALORIES_PLACEHOLDER\]/g, targets.calories?.toFixed(0) || 'N/A');
+    processedText = processedText.replace(/\[DAILY_PROTEIN_CONSUMED_PLACEHOLDER\]/g, todayIntake.proteinConsumed.toFixed(0));
+    processedText = processedText.replace(/\[TARGET_PROTEIN_PLACEHOLDER\]/g, targets.protein?.toFixed(0) || 'N/A');
+    processedText = processedText.replace(/\[DAILY_CARBS_CONSUMED_PLACEHOLDER\]/g, todayIntake.carbsConsumed.toFixed(0));
+    processedText = processedText.replace(/\[TARGET_CARBS_PLACEHOLDER\]/g, targets.carbs?.toFixed(0) || 'N/A');
+    processedText = processedText.replace(/\[DAILY_FATS_CONSUMED_PLACEHOLDER\]/g, todayIntake.fatsConsumed.toFixed(0));
+    processedText = processedText.replace(/\[TARGET_FATS_PLACEHOLDER\]/g, targets.fats?.toFixed(0) || 'N/A');
 
+    const formatRemainingMessage = (consumed: number, target: number | null, unit: string) => {
+        if (target === null || target <= 0) return "objetivo no establecido.";
+        const remaining = target - consumed;
+        if (remaining > 0) return `${remaining.toFixed(0)}${unit} por consumir.`;
+        return `${Math.abs(remaining).toFixed(0)}${unit} sobre tu objetivo.`;
+    };
 
-  const handleSendTextMessage = useCallback(async (userInput: string, inputMethod: 'text' | 'voice' | 'image' = 'text') => {
-    if (!userInput.trim() && inputMethod === 'text') return;
+    processedText = processedText.replace(/\[CALORIES_REMAINING_MESSAGE_PLACEHOLDER\]/g, formatRemainingMessage(todayIntake.caloriesConsumed, targets.calories, 'kcal'));
+    processedText = processedText.replace(/\[PROTEIN_REMAINING_MESSAGE_PLACEHOLDER\]/g, formatRemainingMessage(todayIntake.proteinConsumed, targets.protein, 'g'));
+    processedText = processedText.replace(/\[CARBS_REMAINING_MESSAGE_PLACEHOLDER\]/g, formatRemainingMessage(todayIntake.carbsConsumed, targets.carbs, 'g'));
+    processedText = processedText.replace(/\[FATS_REMAINING_MESSAGE_PLACEHOLDER\]/g, formatRemainingMessage(todayIntake.fatsConsumed, targets.fats, 'g'));
+    
+    let muscleGainReminder = "";
+    if ((profile.goals === PersonalGoal.GainMuscleImproveComposition || (profile.athleticGoals || []).includes(AthleticGoalOptions.MuscleGainPower)) && targets.protein) {
+        let idealWeightInfo = "";
+        const weightKg = parseFloat(profile.weight);
+        const heightCm = parseInt(profile.height);
+        if (heightCm > 0 && weightKg > 0) {
+            const ibwData = calculateIdealBodyWeightRange(heightCm);
+            if (ibwData) {
+                idealWeightInfo = ` (idealmente, alrededor de ${ibwData.ideal.toFixed(1)} kg)`;
+            }
+        }
+        muscleGainReminder = `Dado que uno de tus objetivos es ganar masa muscular, es clave alcanzar tu meta de proteínas de aproximadamente ${targets.protein.toFixed(0)}g diarios. Esto suele equivaler a 1.6-2.2 gramos de proteína por kilogramo de tu peso corporal${idealWeightInfo}. ¡Asegúrate de que tus comidas contribuyan a este objetivo! `;
+    }
+    processedText = processedText.replace(/\[MUSCLE_GAIN_PROTEIN_REMINDER_PLACEHOLDER\]/g, muscleGainReminder);
+    
+    return processedText;
+};
+
+  const handleSendMessage = useCallback(async (
+    userInput: string | null,
+    inputMethod: 'text' | 'voice' | 'image' = 'text',
+    audioData?: { base64Data: string; mimeType: string },
+    imageData?: { base64Data: string; mimeType: string; dataUri: string }
+  ) => {
+    if (!userInput?.trim() && inputMethod === 'text' && !imageData) return;
     setLastInputMethod(inputMethod);
-    console.log(`Nutri-Kick AI: handleSendTextMessage called. Method: ${inputMethod}, Input: ${userInput}`);
 
-    const newUserMessage: Message = { id: crypto.randomUUID(), sender: 'user', text: userInput, timestamp: new Date() };
+    const displayUserText = imageData ? imageData.dataUri : (userInput || (audioData ? "🎤 Audio enviado..." : ""));
+    const newUserMessage: Message = { id: crypto.randomUUID(), sender: 'user', text: displayUserText, timestamp: new Date() };
     setMessages(prev => {
         const updatedMessages = [...prev, newUserMessage];
         setTimeout(() => document.getElementById(`message-${newUserMessage.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0);
         return updatedMessages;
     });
-    setIsLoading(true); setError(null); setSuccessMessage(null);
+    setIsLoading(true); setError(null); 
 
     try {
-      const aiResponseText = await generateNutriKickResponse(userInput, userProfile, null, null);
-      console.log("%cNutri-Kick AI: Raw AI Response Received (Text Input):", "color: cyan; font-weight: bold;", JSON.stringify(aiResponseText));
+      const aiResponse: GeminiServiceResponse = await generateNutriKickResponse(
+        userInput, userProfile, audioData, imageData ? { base64Data: imageData.base64Data, mimeType: imageData.mimeType } : undefined,
+        dailyIntake, nutrientTargets, currentBMR, currentTDEE
+      );
       
-      const newAiMessage: Message = { id: crypto.randomUUID(), sender: 'ai', text: stripSpeakTags(aiResponseText), timestamp: new Date() };
+      let finalAiText = aiResponse.text;
+      let updatedIntake = dailyIntake;
+
+      if (aiResponse.estimatedIntake) {
+        const meal = aiResponse.estimatedIntake;
+        updatedIntake = {
+            ...dailyIntake,
+            caloriesConsumed: dailyIntake.caloriesConsumed + meal.calories,
+            proteinConsumed: dailyIntake.proteinConsumed + meal.protein,
+            carbsConsumed: dailyIntake.carbsConsumed + meal.carbs,
+            fatsConsumed: dailyIntake.fatsConsumed + meal.fats,
+        };
+        setDailyIntake(updatedIntake); 
+        finalAiText = processAiResponseWithPlaceholders(aiResponse.text, meal, updatedIntake, nutrientTargets, userProfile);
+      } else {
+        finalAiText = processAiResponseWithPlaceholders(aiResponse.text, undefined, dailyIntake, nutrientTargets, userProfile);
+      }
+      
+      const newAiMessage: Message = { id: crypto.randomUUID(), sender: 'ai', text: finalAiText, timestamp: new Date() };
       setMessages(prev => {
         const updatedMessages = [...prev, newAiMessage];
         setTimeout(() => document.getElementById(`message-${newAiMessage.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0);
         return updatedMessages;
       });
+
     } catch (err) {
       console.error("Error fetching AI response:", err);
       const errorMessageText = err instanceof Error ? err.message : "Ocurrió un error al contactar a Nutri-Kick AI.";
       setError(errorMessageText);
-      const newErrorAiMessage: Message = { id: crypto.randomUUID(), sender: 'ai', text: `Lo siento, tuve problemas para procesar tu solicitud: ${errorMessageText}. Por favor, revisa tu conexión o inténtalo más tarde. 🛠️`, timestamp: new Date() };
+      const errorMsg = `Lo siento, tuve problemas: ${errorMessageText}. Inténtalo más tarde. 🛠️`;
+      const newErrorAiMessage: Message = { id: crypto.randomUUID(), sender: 'ai', text: errorMsg, timestamp: new Date() };
       setMessages(prev => {
         const updatedMessages = [...prev, newErrorAiMessage];
         setTimeout(() => document.getElementById(`message-${newErrorAiMessage.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0);
@@ -280,335 +475,138 @@ const App: React.FC = () => {
       });
       setTimeout(() => setError(null), 7000);
     } finally { setIsLoading(false); }
-  }, [userProfile]);
+  }, [userProfile, dailyIntake, nutrientTargets, currentBMR, currentTDEE, processAiResponseWithPlaceholders]);
+
+
+  const handleSendTextMessage = useCallback((text: string) => {
+    handleSendMessage(text, 'text');
+  }, [handleSendMessage]);
 
   const handleSendAudioMessage = useCallback(async (base64Audio: string, mimeType: string) => {
-    setLastInputMethod('voice');
-    console.log("Nutri-Kick AI: handleSendAudioMessage called.");
-    const audioUserMessageText = "🎤 Audio enviado a NutriKick...";
-    const newUserMessage: Message = { id: crypto.randomUUID(), sender: 'user', text: audioUserMessageText, timestamp: new Date() };
-     setMessages(prev => {
-        const updatedMessages = [...prev, newUserMessage];
-        setTimeout(() => document.getElementById(`message-${newUserMessage.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0);
-        return updatedMessages;
-    });
-    setIsLoading(true); setError(null); setSuccessMessage(null);
-
-    try {
-      const aiResponseText = await generateNutriKickResponse(null, userProfile, { base64Data: base64Audio, mimeType }, null); 
-      console.log("%cNutri-Kick AI: Raw AI Response Received (Audio Input):", "color: cyan; font-weight: bold;", JSON.stringify(aiResponseText));
-      const newAiMessage: Message = { id: crypto.randomUUID(), sender: 'ai', text: stripSpeakTags(aiResponseText), timestamp: new Date() };
-      setMessages(prev => {
-        const updatedMessages = [...prev, newAiMessage];
-        setTimeout(() => document.getElementById(`message-${newAiMessage.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0);
-        return updatedMessages;
-      });
-    } catch (err) {
-      console.error("Error fetching AI response for audio:", err);
-      const errorMessageText = err instanceof Error ? err.message : "Ocurrió un error al contactar a Nutri-Kick AI.";
-      setError(errorMessageText);
-      const newErrorAiMessage: Message = { id: crypto.randomUUID(), sender: 'ai', text: `Lo siento, tuve problemas para procesar tu audio: ${errorMessageText}. Por favor, revisa tu conexión o inténtalo más tarde. 🛠️`, timestamp: new Date() };
-      setMessages(prev => {
-        const updatedMessages = [...prev, newErrorAiMessage];
-        setTimeout(() => document.getElementById(`message-${newErrorAiMessage.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0);
-        return updatedMessages;
-      });
-      setTimeout(() => setError(null), 7000);
-    } finally { setIsLoading(false); }
-  }, [userProfile]);
+    handleSendMessage(null, 'voice', { base64Data: base64Audio, mimeType });
+  }, [handleSendMessage]);
 
   const handleSendImageMessage = useCallback(async (imageBase64DataUri: string) => {
-    setLastInputMethod('image');
-    console.log("Nutri-Kick AI: handleSendImageMessage called.");
-    const newUserMessage: Message = { id: crypto.randomUUID(), sender: 'user', text: imageBase64DataUri, timestamp: new Date() };
-    setMessages(prev => {
-        const updatedMessages = [...prev, newUserMessage];
-        setTimeout(() => document.getElementById(`message-${newUserMessage.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0);
-        return updatedMessages;
-    });
-    setIsLoading(true); setError(null); setSuccessMessage(null);
-
     const mimeType = dataURItoMIME(imageBase64DataUri);
     const base64Data = imageBase64DataUri.split(',')[1];
-
-    try {
-      const aiResponseText = await generateNutriKickResponse("Analiza la imagen que he enviado.", userProfile, null, { base64Data, mimeType });
-      console.log("%cNutri-Kick AI: Raw AI Response Received (Image Input):", "color: cyan; font-weight: bold;", JSON.stringify(aiResponseText));
-      const newAiMessage: Message = { id: crypto.randomUUID(), sender: 'ai', text: stripSpeakTags(aiResponseText), timestamp: new Date() };
-      setMessages(prev => {
-        const updatedMessages = [...prev, newAiMessage];
-        setTimeout(() => document.getElementById(`message-${newAiMessage.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0);
-        return updatedMessages;
-      });
-    } catch (err) {
-      console.error("Error fetching AI response for image:", err);
-      const errorMessageText = err instanceof Error ? err.message : "Ocurrió un error al contactar a Nutri-Kick AI.";
-      setError(errorMessageText);
-      const newErrorAiMessage: Message = { id: crypto.randomUUID(), sender: 'ai', text: `Lo siento, tuve problemas para procesar tu imagen: ${errorMessageText}. 🛠️`, timestamp: new Date() };
-      setMessages(prev => {
-        const updatedMessages = [...prev, newErrorAiMessage];
-        setTimeout(() => document.getElementById(`message-${newErrorAiMessage.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0);
-        return updatedMessages;
-      });
-      setTimeout(() => setError(null), 7000);
-    } finally { setIsLoading(false); }
-  }, [userProfile]);
+    const promptForImage = chatInputRef.current?.value.trim() || "Analiza la imagen que he enviado. Si es comida, intenta estimar sus nutrientes para mi registro diario.";
+    if (chatInputRef.current) chatInputRef.current.value = ""; 
+    
+    handleSendMessage(promptForImage, 'image', undefined, { base64Data, mimeType, dataUri: imageBase64DataUri });
+  }, [handleSendMessage, chatInputRef]);
 
 
   const handleToggleRecording = useCallback(async () => {
     setMicPermissionError(null);
     if (isRecording) {
-      if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
-        mediaRecorderRef.current.stop();
-        console.log("Nutri-Kick AI: MediaRecorder explicitly stopped by user.");
-      }
+      if (mediaRecorderRef.current?.state === "recording") mediaRecorderRef.current.stop();
       setIsRecording(false);
     } else {
-      if (typeof MediaRecorder === 'undefined') {
-        setMicPermissionError("MediaRecorder no es compatible con este navegador."); setTimeout(() => setMicPermissionError(null), 7000); return;
-      }
+      if (typeof MediaRecorder === 'undefined') { setMicPermissionError("Tu navegador no soporta grabación de audio. 😥"); return; }
       try {
-        console.log("Nutri-Kick AI: Requesting microphone access...");
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        console.log("Nutri-Kick AI: Microphone access granted.");
-        
         const supportedMimeType = getSupportedMimeType();
-        actualMimeTypeRef.current = supportedMimeType || 'audio/webm'; 
-        console.log("Nutri-Kick AI: Using MIME type for MediaRecorder:", actualMimeTypeRef.current);
-
+        actualMimeTypeRef.current = supportedMimeType || 'audio/webm';
         const options = supportedMimeType ? { mimeType: supportedMimeType } : {};
-        
-        try { 
-            mediaRecorderRef.current = new MediaRecorder(stream, options); 
-            console.log("Nutri-Kick AI: MediaRecorder instance created with options:", options);
-        } 
-        catch (recErr: any) {
-             console.error("Error instantiating MediaRecorder:", recErr.name, recErr.message, "Options:", options);
-             setMicPermissionError(`Error grabadora: ${recErr.message}. Verifica los formatos soportados.`); setTimeout(() => setMicPermissionError(null), 7000);
-             stream.getTracks().forEach(track => track.stop()); return; 
-        }
-
+        mediaRecorderRef.current = new MediaRecorder(stream, options);
         audioChunksRef.current = [];
-        mediaRecorderRef.current.ondataavailable = (event) => {
-          if (event.data.size > 0) audioChunksRef.current.push(event.data);
-        };
+        mediaRecorderRef.current.ondataavailable = (event) => { if (event.data.size > 0) audioChunksRef.current.push(event.data); };
         mediaRecorderRef.current.onstop = async () => {
-          console.log("Nutri-Kick AI: MediaRecorder stopped. Number of chunks:", audioChunksRef.current.length);
           const finalMimeType = mediaRecorderRef.current?.mimeType || actualMimeTypeRef.current;
-          
-          if (audioChunksRef.current.length === 0) {
-            console.warn("Nutri-Kick AI: No audio data chunks recorded.");
-            stream.getTracks().forEach(track => track.stop()); 
-            setIsRecording(false); 
-            setMicPermissionError("No se grabó audio. Inténtalo de nuevo.");
-            setTimeout(() => setMicPermissionError(null), 5000);
-            return;
-          }
-
+          if (audioChunksRef.current.length === 0) { console.warn("No audio chunks recorded."); stream.getTracks().forEach(t => t.stop()); setIsRecording(false); return; }
           const audioBlob = new Blob(audioChunksRef.current, { type: finalMimeType });
-          audioChunksRef.current = []; 
-          
-          if (audioBlob.size === 0) {
-            console.warn("Nutri-Kick AI: Recorded audio blob is empty after creation.");
-            stream.getTracks().forEach(track => track.stop()); 
-            setIsRecording(false); 
-            return;
-          }
+          audioChunksRef.current = [];
+          if (audioBlob.size === 0) { console.warn("Audio blob is empty."); stream.getTracks().forEach(t => t.stop()); setIsRecording(false); return; }
           try {
             const base64Audio = await blobToBase64(audioBlob);
             handleSendAudioMessage(base64Audio, finalMimeType);
-          } catch (e) { 
-            console.error("Error converting blob to base64:", e); 
-            setError("Error procesando audio grabado."); 
-            setTimeout(() => setError(null), 5000); 
-          }
-          stream.getTracks().forEach(track => track.stop()); 
-          setIsRecording(false); 
-          chatInputRef.current?.focus(); 
+          } catch (e) { console.error("Blob to base64 error:", e); setError("Error procesando audio."); setTimeout(() => setError(null), 5000); }
+          stream.getTracks().forEach(track => track.stop()); setIsRecording(false); chatInputRef.current?.focus();
         };
-        mediaRecorderRef.current.onerror = (event: Event) => {
-            console.error("MediaRecorder error event:", event);
-            const mre = event as any; 
-            let em = "Ocurrió un error durante la grabación.";
-            if (mre?.error?.name === 'NotAllowedError') em = "Permiso para micrófono denegado.";
-            else if (mre?.error?.message) em = mre.error.message;
-            setMicPermissionError(em); setTimeout(() => setMicPermissionError(null), 7000);
-            setIsRecording(false); 
-            stream.getTracks().forEach(track => track.stop()); 
-            chatInputRef.current?.focus(); 
-        };
-
-        mediaRecorderRef.current.start(); 
-        console.log("Nutri-Kick AI: MediaRecorder started recording.");
-        setIsRecording(true);
-        if (chatInputRef.current) chatInputRef.current.value = ""; 
-      } catch (err: any) {
-        console.error("Error accessing microphone or starting MediaRecorder:", err.name, err.message);
-        if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
-          setMicPermissionError("Permiso para usar el micrófono denegado. Revísalo en los ajustes de tu navegador.");
-        } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
-          setMicPermissionError("No se encontró un micrófono disponible.");
-        } else if (err.message?.toLowerCase().includes("mime")) {
-            setMicPermissionError("Formato de audio no compatible por el navegador.");
-        } else {
-          setMicPermissionError("No se pudo iniciar la grabación. Verifica el micrófono.");
-        }
-        setTimeout(() => setMicPermissionError(null), 7000); 
-        setIsRecording(false);
+        mediaRecorderRef.current.onerror = (event: Event) => { console.error("MediaRecorder error:", event); setMicPermissionError("Error durante la grabación."); setIsRecording(false); stream.getTracks().forEach(t => t.stop()); chatInputRef.current?.focus(); };
+        mediaRecorderRef.current.start(); setIsRecording(true); if (chatInputRef.current) chatInputRef.current.value = "";
+      } catch (err: any) { 
+        console.error("getUserMedia error:", err);
+        if (err.name === 'NotAllowedError') setMicPermissionError("Permiso de micrófono denegado. Actívalo en los ajustes del navegador.");
+        else if (err.name === 'NotFoundError') setMicPermissionError("No se encontró un micrófono. Conecta uno y reintenta.");
+        else setMicPermissionError("Error al acceder al micrófono.");
+        setIsRecording(false); 
       }
     }
   }, [isRecording, handleSendAudioMessage]);
 
   const handleOpenCamera = useCallback(async () => {
-    console.log("Nutri-Kick AI: Attempting to open camera...");
     setCameraError(null);
-    if (typeof navigator.mediaDevices?.getUserMedia !== 'function') {
-      console.error("Nutri-Kick AI: getUserMedia not supported.");
-      setCameraError("La cámara no es compatible con este navegador.");
-      setTimeout(() => setCameraError(null), 5000);
-      return;
-    }
+    if (typeof navigator.mediaDevices?.getUserMedia !== 'function') { setCameraError("Tu navegador no soporta acceso a la cámara."); return; }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
-      console.log("Nutri-Kick AI: Camera stream obtained.");
-      videoStreamRef.current = stream;
-      setIsCameraOpen(true); 
-    } catch (err: any) {
+      videoStreamRef.current = stream; setIsCameraOpen(true);
+    } catch (err: any) { 
       console.error("Error accessing camera:", err);
-      if (err.name === "NotAllowedError" || err.name === "PermissionDeniedError") {
-        setCameraError("Permiso de cámara denegado. Habilítalo en los ajustes de tu navegador.");
-      } else if (err.name === "NotFoundError" || err.name === "DevicesNotFoundError") {
-        setCameraError("No se encontró una cámara disponible.");
-      } else {
-        setCameraError("No se pudo acceder a la cámara. Error: " + err.message);
-      }
-      setTimeout(() => setCameraError(null), 7000);
-      setIsCameraOpen(false); 
+      if (err.name === 'NotAllowedError') setCameraError("Permiso de cámara denegado. Actívalo en los ajustes.");
+      else if (err.name === 'NotFoundError') setCameraError("No se encontró una cámara.");
+      else setCameraError("Error al acceder a la cámara.");
+      setIsCameraOpen(false);
     }
   }, []);
   
   useEffect(() => {
     if (isCameraOpen && videoStreamRef.current && videoElementRef.current) {
-        console.log("Nutri-Kick AI: Attaching stream to video element.");
         videoElementRef.current.srcObject = videoStreamRef.current;
-        videoElementRef.current.play().catch(playError => {
-            console.error("Nutri-Kick AI: Error playing video stream:", playError);
-            setCameraError("Error al iniciar la vista de cámara. Intenta de nuevo.");
-             setTimeout(() => setCameraError(null), 5000);
-        });
-    } else if (!isCameraOpen && videoElementRef.current) {
-        videoElementRef.current.srcObject = null; 
-        console.log("Nutri-Kick AI: Cleared srcObject from video element.");
-    }
+        videoElementRef.current.play().catch(e => { console.error("Video play error:", e); setCameraError("Error al iniciar cámara."); });
+    } else if (!isCameraOpen && videoElementRef.current) { videoElementRef.current.srcObject = null; }
   }, [isCameraOpen]); 
 
 
   const handleCloseCamera = useCallback(() => {
-    console.log("Nutri-Kick AI: Closing camera.");
-    if (videoStreamRef.current) {
-      videoStreamRef.current.getTracks().forEach(track => {
-        track.stop();
-        console.log(`Nutri-Kick AI: Stopped camera track: ${track.label}`);
-      });
-      videoStreamRef.current = null;
-    }
-    setIsCameraOpen(false);
+    if (videoStreamRef.current) videoStreamRef.current.getTracks().forEach(track => track.stop());
+    videoStreamRef.current = null; setIsCameraOpen(false);
   }, []);
 
   const handleCaptureImage = useCallback(() => {
-    console.log("Nutri-Kick AI: Attempting to capture image.");
-    if (videoElementRef.current && canvasElementRef.current && 
-        videoElementRef.current.readyState >= videoElementRef.current.HAVE_METADATA && 
-        videoElementRef.current.videoWidth > 0 && videoElementRef.current.videoHeight > 0 
-    ) {
-      const video = videoElementRef.current;
-      const canvas = canvasElementRef.current;
-      
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-
+    if (videoElementRef.current && canvasElementRef.current && videoElementRef.current.readyState >= videoElementRef.current.HAVE_METADATA && videoElementRef.current.videoWidth > 0) {
+      const video = videoElementRef.current; const canvas = canvasElementRef.current;
+      canvas.width = video.videoWidth; canvas.height = video.videoHeight;
       const context = canvas.getContext('2d');
       if (context) {
-        const videoStyle = window.getComputedStyle(video);
-        if (videoStyle.transform.includes('matrix(-1') || videoStyle.transform.includes('scaleX(-1)')) {
-            console.log("Nutri-Kick AI: Video is mirrored, flipping canvas for capture.");
-            context.translate(canvas.width, 0);
-            context.scale(-1, 1);
-        }
-        
+        if (window.getComputedStyle(video).transform.includes('matrix(-1')) { context.translate(canvas.width, 0); context.scale(-1, 1); }
         context.drawImage(video, 0, 0, canvas.width, canvas.height);
         const dataUri = canvas.toDataURL('image/jpeg', 0.85); 
-        console.log("Nutri-Kick AI: Image captured as data URI (first 50 chars):", dataUri.substring(0,50));
         handleSendImageMessage(dataUri);
-      } else {
-        console.error("Nutri-Kick AI: Failed to get 2D context from canvas.");
-        setCameraError("Error al procesar la imagen capturada.");
-        setTimeout(() => setCameraError(null), 5000);
-      }
-    } else {
-       console.error("Nutri-Kick AI: Capture failed. Video/Canvas ref missing or video not ready/dimensions invalid. Video readyState:", videoElementRef.current?.readyState, "videoWidth:", videoElementRef.current?.videoWidth, "videoHeight:", videoElementRef.current?.videoHeight);
-       setCameraError("No se pudo capturar la imagen. Video no listo o sin dimensiones.");
-       setTimeout(() => setCameraError(null), 5000);
-    }
-    handleCloseCamera();
-    chatInputRef.current?.focus(); 
+      } else { setCameraError("Error procesando imagen."); setTimeout(() => setCameraError(null), 5000); }
+    } else { setCameraError("No se pudo capturar. Video no listo."); setTimeout(() => setCameraError(null), 5000); }
+    handleCloseCamera(); chatInputRef.current?.focus();
   }, [handleCloseCamera, handleSendImageMessage, chatInputRef]);
 
 
-  useEffect(() => {
+  useEffect(() => { 
     return () => {
-      if (mediaRecorderRef.current?.state === "recording") {
-        mediaRecorderRef.current.stop();
-      }
       mediaRecorderRef.current?.stream?.getTracks().forEach(track => track.stop());
-      if (videoStreamRef.current) {
-        videoStreamRef.current.getTracks().forEach(track => track.stop());
-      }
-      console.log("Nutri-Kick AI: App component unmounted, cleaned up media streams.");
+      videoStreamRef.current?.getTracks().forEach(track => track.stop());
     };
   }, []); 
 
-  useEffect(() => {
-    if (messages.length === 0 && !isInitialMessagesLoad.current) { 
-      console.log("Nutri-Kick AI: No messages found, adding initial welcome message.");
+  useEffect(() => { 
+    if (isInitialLoad.current && messages.length === 0) {
       const welcomeMsg: Message = { id: crypto.randomUUID(), sender: 'ai', text: INITIAL_WELCOME_MESSAGE_TEXT, timestamp: new Date() };
       setMessages([welcomeMsg]);
     }
-    if(isInitialMessagesLoad.current) {
-        isInitialMessagesLoad.current = false; 
-    }
-    if(isInitialProfileLoad.current) {
-        isInitialProfileLoad.current = false; 
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   },[]); 
 
   useEffect(() => {
-    if (isInitialProfileLoad.current) return; 
+    if (isInitialLoad.current) {
+        isInitialLoad.current = false; 
+        return; 
+    }
     try {
-      const sanitizedProfileToStore: Partial<UserProfile> = {};
-       for (const key of Object.keys(initialDefaultUserProfile) as Array<keyof UserProfile>) {
-        if (userProfile.hasOwnProperty(key)) {
-            (sanitizedProfileToStore as any)[key] = userProfile[key];
-        }
-      }
-      localStorage.setItem(USER_PROFILE_STORAGE_KEY, JSON.stringify(sanitizedProfileToStore));
-      console.log("Nutri-Kick AI: User profile saved to localStorage.");
-    } catch (error) { console.error("Error saving user profile to localStorage:", error); }
-  }, [userProfile]);
-
-  useEffect(() => {
-    if (isInitialMessagesLoad.current) return; 
-    try {
-      if (messages.length > 0) {
-        localStorage.setItem(CHAT_MESSAGES_STORAGE_KEY, JSON.stringify(messages));
-        console.log("Nutri-Kick AI: Chat messages saved to localStorage.");
-      } else {
-        localStorage.removeItem(CHAT_MESSAGES_STORAGE_KEY); 
-        console.log("Nutri-Kick AI: Chat messages cleared from localStorage.");
-      }
-    } catch (error) { console.error("Error saving messages to localStorage:", error); }
-  }, [messages]);
+      localStorage.setItem(USER_PROFILE_STORAGE_KEY, JSON.stringify(userProfile));
+      if (messages.length > 0) localStorage.setItem(CHAT_MESSAGES_STORAGE_KEY, JSON.stringify(messages));
+      else localStorage.removeItem(CHAT_MESSAGES_STORAGE_KEY);
+      localStorage.setItem(DAILY_INTAKE_STORAGE_KEY, JSON.stringify(dailyIntake));
+      localStorage.setItem(NUTRIENT_TARGETS_STORAGE_KEY, JSON.stringify(nutrientTargets));
+    } catch (error) { console.error("Error saving to localStorage:", error); }
+  }, [userProfile, messages, dailyIntake, nutrientTargets]);
 
 
   return (
@@ -625,19 +623,11 @@ const App: React.FC = () => {
         {dbStatus === 'error' && dbErrorDetails && (
             <div className="bg-red-700/90 text-white p-3 text-sm m-2 mx-0 sm:mx-2 rounded-md shadow-lg animate-fadeIn border-l-4 border-red-400" role="alert">
                 <p className="font-bold text-base">⚠️ ¡Problema con la Base de Datos (Supabase)!</p>
-                <div className="mt-1 whitespace-pre-line text-xs">
-                  {dbErrorDetails}
-                </div>
-                 <p className="mt-2 text-xs">Consulta la consola del desarrollador (F12) para más detalles técnicos sobre la inicialización de Supabase.</p>
+                <div className="mt-1 whitespace-pre-line text-xs">{dbErrorDetails}</div>
+                 <p className="mt-2 text-xs">Consulta la consola del desarrollador (F12) para más detalles.</p>
             </div>
         )}
-        {dbStatus === 'checking' && ( // You might not need 'checking' if Supabase init is synchronous in the service
-            <div className="bg-yellow-600/80 text-white p-3 text-sm m-2 mx-0 sm:mx-2 rounded-md shadow-lg animate-fadeIn" role="status">
-                <p className="font-bold">🔍 Verificando conexión con la base de datos (Supabase)...</p>
-            </div>
-        )}
-
-
+      
         <main className="flex-grow overflow-y-auto custom-scrollbar p-1 sm:p-2 md:p-4 bg-slate-700 relative">
           {activeTab === 'chat' && (
             <ChatWindow
@@ -652,7 +642,14 @@ const App: React.FC = () => {
                 onOpenCamera={handleOpenCamera}
               />
           )}
-          {activeTab === 'profile' && ( <ProfileEditor initialProfile={userProfile} onUpdateProfile={handleProfileUpdate} /> )}
+          {activeTab === 'profile' && ( 
+            <ProfileEditor 
+              initialProfile={userProfile} 
+              onUpdateProfile={handleProfileUpdate}
+              onEditingComplete={handleProfileEditingComplete}
+              isActive={activeTab === 'profile'} 
+            /> 
+          )}
         </main>
 
         {isCameraOpen && (

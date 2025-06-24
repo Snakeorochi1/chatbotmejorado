@@ -1,11 +1,10 @@
 
+
 import { GoogleGenAI, GenerateContentResponse, Part } from "@google/genai";
-import { UserProfile, Gender } from '../types'; // Removed unused enum imports
+import { UserProfile, Gender, PersonalGoal, DailyIntake, NutrientTargets, EstimatedFoodIntake, SportsDiscipline, AthleticGoalOptions, DietaryApproachOptions, DietaryRestrictionOptions } from '../types';
 import { GEMINI_MODEL_NAME, NUTRI_KICK_AI_PERSONA_PROMPT_TEMPLATE } from '../constants';
 
 // AI Studio is expected to provide process.env.API_KEY.
-// The check for its validity will happen during the API call itself,
-// or the constructor might have internal checks. The prompt implies it's pre-configured and valid.
 if (!process.env.API_KEY || process.env.API_KEY.includes("MISSING") || process.env.API_KEY.includes("FALLBACK") ||process.env.API_KEY.length < 30 ) {
   console.warn(
     "Gemini API key from process.env.API_KEY appears to be missing, a placeholder, or too short at module initialization. " +
@@ -16,21 +15,54 @@ if (!process.env.API_KEY || process.env.API_KEY.includes("MISSING") || process.e
 
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
+export interface GeminiServiceResponse {
+  text: string;
+  estimatedIntake?: EstimatedFoodIntake;
+}
+
+const parseEstimatedFoodIntake = (responseText: string): EstimatedFoodIntake | undefined => {
+  const regex = /<nk_food_estimation_json>(.*?)<\/nk_food_estimation_json>/s;
+  const match = responseText.match(regex);
+  if (match && match[1]) {
+    try {
+      const jsonData = JSON.parse(match[1]);
+      if (jsonData && typeof jsonData.foodDescription === 'string' &&
+          typeof jsonData.calories === 'number' &&
+          typeof jsonData.protein === 'number' &&
+          typeof jsonData.carbs === 'number' &&
+          typeof jsonData.fats === 'number') {
+        return jsonData as EstimatedFoodIntake;
+      }
+    } catch (e) {
+      console.error("Error parsing food estimation JSON from AI response:", e, "JSON content:", match[1]);
+    }
+  }
+  return undefined;
+};
+
+const cleanResponseText = (responseText: string): string => {
+  return responseText.replace(/<nk_food_estimation_json>(.*?)<\/nk_food_estimation_json>/s, '').trim();
+};
+
+
 export const generateNutriKickResponse = async (
-  userInput: string | null, // Text prompt
+  userInput: string | null,
   userProfile: UserProfile,
-  audioInput?: { base64Data: string; mimeType: string }, // Optional audio input
-  imageInput?: { base64Data: string; mimeType: string }  // Optional image input
-): Promise<string> => {
-  // The API key's presence and validity are primarily checked by the API call itself.
-  // The constructor with process.env.API_KEY is the standard way for AI Studio.
+  audioInput?: { base64Data: string; mimeType: string },
+  imageInput?: { base64Data: string; mimeType: string },
+  dailyIntake?: DailyIntake, 
+  nutrientTargets?: NutrientTargets, 
+  bmr?: number | null, 
+  tdee?: number | null  
+): Promise<GeminiServiceResponse> => {
 
   let userDataContext = "El usuario no ha proporcionado todos los datos de perfil específicos o acaba de empezar.\n";
   const relevantProfileData: Partial<UserProfile> = { ...userProfile };
   const profileKeys = Object.keys(relevantProfileData) as Array<keyof UserProfile>;
   const hasSomeProfileData = profileKeys.some(key => {
     const value = relevantProfileData[key];
-    if (typeof value === 'boolean') return true;
+    if (typeof value === 'boolean') return true; 
+    if (Array.isArray(value)) return value.length > 0; 
     return value && value.toString().trim() !== '';
   });
 
@@ -44,13 +76,48 @@ export const generateNutriKickResponse = async (
          userDataContext += `* Género: ${userProfile.gender}\n`;
     }
     userDataContext += `* ¿Es atleta?: ${userProfile.isAthlete ? 'Sí' : 'No'}\n`;
+    
     if (userProfile.isAthlete) {
-      if (userProfile.position) userDataContext += `* Posición en el campo (Fútbol): ${userProfile.position}\n`;
-      if (userProfile.trainingLoad) userDataContext += `* Carga de entrenamiento (Fútbol): ${userProfile.trainingLoad}\n`;
+      if (userProfile.sportsDiscipline) {
+        userDataContext += `* Disciplina Deportiva: ${userProfile.sportsDiscipline}\n`;
+      }
+      if (userProfile.position) userDataContext += `* Posición/Rol: ${userProfile.position}\n`;
+      if (userProfile.trainingLoad) userDataContext += `* Carga de Entrenamiento: ${userProfile.trainingLoad}\n`;
+      if (userProfile.athleticGoals && userProfile.athleticGoals.length > 0) {
+        userDataContext += `* Objetivos Atléticos Específicos: ${userProfile.athleticGoals.join(', ')}\n`;
+      }
     } else {
       if (userProfile.trainingFrequency) userDataContext += `* Frecuencia de entrenamiento general: ${userProfile.trainingFrequency}\n`;
     }
-    if (userProfile.goals) userDataContext += `* Objetivo principal: ${userProfile.goals}\n`;
+    if (userProfile.goals) userDataContext += `* Objetivo Principal (General): ${userProfile.goals}\n`;
+
+    // Updated dietary context
+    if (userProfile.dietaryApproaches && userProfile.dietaryApproaches.length > 0) {
+      userDataContext += `* Preferencias Alimentarias/Enfoques Dietéticos: ${userProfile.dietaryApproaches.join(', ')}\n`;
+    }
+    if (userProfile.dietaryRestrictions && userProfile.dietaryRestrictions.length > 0) {
+      userDataContext += `* Restricciones Alimentarias/Alergias: ${userProfile.dietaryRestrictions.join(', ')}\n`;
+    }
+
+    if (userProfile.currentSupplementUsage) {
+      userDataContext += `* Consume Suplementos: ${userProfile.currentSupplementUsage}\n`;
+    }
+    if (userProfile.supplementInterestOrUsageDetails) {
+      userDataContext += `* Detalles de Suplementos: ${userProfile.supplementInterestOrUsageDetails}\n`;
+    }
+    if (userProfile.wellnessFocusAreas && userProfile.wellnessFocusAreas.length > 0) {
+      userDataContext += `* Áreas de Enfoque en Bienestar: ${userProfile.wellnessFocusAreas.join(', ')}\n`;
+    }
+    if (userProfile.moodToday) userDataContext += `* Ánimo Hoy: ${userProfile.moodToday}\n`;
+    if (userProfile.trainedToday) userDataContext += `* Entrenamiento Hoy: ${userProfile.trainedToday}\n`;
+    if (userProfile.hadBreakfast) userDataContext += `* Desayuno Hoy: ${userProfile.hadBreakfast}\n`;
+    if (userProfile.energyLevel) userDataContext += `* Nivel de Energía Hoy: ${userProfile.energyLevel}\n`;
+    if (userProfile.lastCheckInTimestamp) {
+        const date = new Date(userProfile.lastCheckInTimestamp);
+        userDataContext += `* Último Check-in (Perfil): ${date.toLocaleDateString()} ${date.toLocaleTimeString()}\n (Timestamp: ${userProfile.lastCheckInTimestamp})\n`;
+    } else {
+        userDataContext += `* Último Check-in (Perfil): No registrado\n`;
+    }
   }
 
   let finalSystemInstruction = NUTRI_KICK_AI_PERSONA_PROMPT_TEMPLATE;
@@ -69,17 +136,56 @@ Si el usuario insiste en pedir consejos específicos, reitera esta recomendació
   if (imageInput) {
     imageAnalysisInstruction = `
 El usuario ha proporcionado una imagen. Por favor, analízala.
-- Si parece un plato de comida, describe los componentes principales que identificas y ofrece comentarios generales sobre su posible adecuación para un deportista, en línea con el perfil del usuario si es relevante. Pregunta si desea un análisis más detallado de algún componente.
-- Si parece una etiqueta de producto o un código de barras, intenta extraer la información nutricional visible (calorías, macros, ingredientes principales). Si ves un código de barras pero no puedes leer la información, menciona que no puedes buscar códigos de barras directamente pero que puedes analizar la información de la etiqueta si es legible.
+- Si parece un plato de comida, puedes intentar estimar sus componentes para el registro de alimentos como se describe en la sección "Food Logging".
+- Si parece una etiqueta de producto, intenta extraer la información nutricional visible.
 - Si no estás seguro de qué es la imagen, descríbela y pregunta al usuario para qué la envió.
-Mantén tu respuesta inicial concisa y luego pregunta si desea más detalles o tiene preguntas específicas sobre la imagen.
 `;
   }
+  
+  let athleteContextForPrompt = "";
+  if (userProfile.isAthlete) {
+    athleteContextForPrompt = `y que practicas ${userProfile.sportsDiscipline || 'un deporte no especificado'} `;
+    if (userProfile.position) {
+      athleteContextForPrompt += `como ${userProfile.position} `;
+    }
+    if (userProfile.athleticGoals && userProfile.athleticGoals.length > 0) {
+      athleteContextForPrompt += `con el/los objetivo(s) de: ${userProfile.athleticGoals.join(', ')}`;
+    }
+    athleteContextForPrompt = athleteContextForPrompt.trim();
+  }
+
 
   const systemInstructionText = finalSystemInstruction
     .replace(/\[USER_NAME_PLACEHOLDER\]/g, userProfile.name || "usuario")
     .replace('[USER_DATA_CONTEXT]', userDataContext)
     .replace('[USER_GOAL_PLACEHOLDER]', userProfile.goals || 'no especificado')
+    .replace('[USER_BMR_PLACEHOLDER]', bmr ? bmr.toFixed(0) : 'N/A')
+    .replace('[USER_TDEE_PLACEHOLDER]', tdee ? tdee.toFixed(0) : 'N/A')
+    .replace('[TARGET_CALORIES_PLACEHOLDER]', nutrientTargets?.calories?.toFixed(0) || 'N/A')
+    .replace('[TARGET_PROTEIN_PLACEHOLDER]', nutrientTargets?.protein?.toFixed(0) || 'N/A')
+    .replace('[TARGET_CARBS_PLACEHOLDER]', nutrientTargets?.carbs?.toFixed(0) || 'N/A')
+    .replace('[TARGET_FATS_PLACEHOLDER]', nutrientTargets?.fats?.toFixed(0) || 'N/A')
+    .replace('[CONSUMED_CALORIES_PLACEHOLDER]', dailyIntake?.caloriesConsumed?.toFixed(0) || '0')
+    .replace('[CONSUMED_PROTEIN_PLACEHOLDER]', dailyIntake?.proteinConsumed?.toFixed(0) || '0')
+    .replace('[CONSUMED_CARBS_PLACEHOLDER]', dailyIntake?.carbsConsumed?.toFixed(0) || '0')
+    .replace('[CONSUMED_FATS_PLACEHOLDER]', dailyIntake?.fatsConsumed?.toFixed(0) || '0')
+    // Updated dietary placeholders
+    .replace(/\[USER_DIETARY_APPROACHES_PLACEHOLDER\]/g, (userProfile.dietaryApproaches || []).join(', ') || 'ninguno especificado')
+    .replace(/\[USER_DIETARY_RESTRICTIONS_PLACEHOLDER\]/g, (userProfile.dietaryRestrictions || []).join(', ') || 'ninguna especificada')
+    .replace(/\[USER_SUPPLEMENT_USAGE_PLACEHOLDER\]/g, userProfile.currentSupplementUsage || 'no especificado')
+    .replace(/\[USER_SUPPLEMENT_DETAILS_PLACEHOLDER\]/g, userProfile.supplementInterestOrUsageDetails || 'ninguno')
+    .replace(/\[USER_WELLNESS_FOCUS_PLACEHOLDER\]/g, (userProfile.wellnessFocusAreas || []).join(', ') || 'ninguna especificada')
+    .replace(/\[USER_MOOD_TODAY_PLACEHOLDER\]/g, userProfile.moodToday || 'no especificado')
+    .replace(/\[USER_TRAINED_TODAY_PLACEHOLDER\]/g, userProfile.trainedToday || 'no especificado')
+    .replace(/\[USER_HAD_BREAKFAST_PLACEHOLDER\]/g, userProfile.hadBreakfast || 'no especificado')
+    .replace(/\[USER_ENERGY_LEVEL_PLACEHOLDER\]/g, userProfile.energyLevel || 'no especificado')
+    .replace(/\[USER_LAST_CHECK_IN_TIMESTAMP_PLACEHOLDER\]/g, userProfile.lastCheckInTimestamp?.toString() || 'nunca')
+    .replace(/\[USER_SPORTS_DISCIPLINE_PLACEHOLDER\]/g, userProfile.sportsDiscipline || 'No especificada')
+    .replace(/\[USER_POSITION_PLACEHOLDER\]/g, userProfile.position || 'No especificada')
+    .replace(/\[USER_ATHLETIC_GOALS_PLACEHOLDER\]/g, (userProfile.athleticGoals || []).join(', ') || 'No especificados')
+    .replace(new RegExp(PersonalGoal.GainMuscleImproveComposition, 'g'), PersonalGoal.GainMuscleImproveComposition) 
+    .replace(new RegExp(AthleticGoalOptions.MuscleGainPower, 'g'), AthleticGoalOptions.MuscleGainPower)
+    .replace(/\[IF_ATHLETE_PROFILE_CONTEXT_PLACEHOLDER\]/g, athleteContextForPrompt ? athleteContextForPrompt : '')
     + "\n" + imageAnalysisInstruction;
 
   const userTurnParts: Part[] = [];
@@ -90,7 +196,7 @@ Mantén tu respuesta inicial concisa y luego pregunta si desea más detalles o t
 
   if (audioInput && audioInput.base64Data && audioInput.mimeType) {
     if (!userInput || !userInput.trim()) {
-        userTurnParts.push({ text: "(El usuario ha enviado una consulta por audio. Por favor, transcríbela y responde.)"});
+        userTurnParts.push({ text: "(El usuario ha enviado una consulta por audio. Por favor, transcríbela y responde. Si parece ser un registro de comida, intenta estimar sus nutrientes.)"});
     } else {
         userTurnParts.push({ text: "(Contexto adicional: Se ha incluido audio del usuario.)"});
     }
@@ -103,6 +209,9 @@ Mantén tu respuesta inicial concisa y luego pregunta si desea más detalles o t
   }
   
   if (imageInput && imageInput.base64Data && imageInput.mimeType) {
+     if (!userInput || !userInput.trim()) { 
+        userTurnParts.push({ text: "Analiza la imagen que he enviado. Si es comida, intenta estimar sus nutrientes para mi registro diario." });
+    }
     userTurnParts.push({
       inlineData: {
         mimeType: imageInput.mimeType,
@@ -112,8 +221,8 @@ Mantén tu respuesta inicial concisa y luego pregunta si desea más detalles o t
   }
 
   if (userTurnParts.length === 0) {
-    console.warn("Gemini: No user input (text, audio, or image) provided for the current turn. Sending a default message.");
-    userTurnParts.push({text: "El usuario no proporcionó entrada de texto, audio o imagen. Por favor, responde de manera general o pregunta qué necesita."})
+    console.warn("Gemini: No user input (text, audio, or image) provided. Sending default.");
+    userTurnParts.push({text: "El usuario no proporcionó entrada. Saluda e inicia un check-in diario si es apropiado según las directrices."}) 
   }
   
   try {
@@ -125,35 +234,41 @@ Mantén tu respuesta inicial concisa y luego pregunta si desea más detalles o t
         contents: [{ role: "user", parts: userTurnParts }],
     });
 
-    const text = response.text;
-    if (text) {
-        return text;
+    const rawText = response.text;
+    if (rawText) {
+        const estimatedIntake = parseEstimatedFoodIntake(rawText);
+        const cleanedText = cleanResponseText(rawText);
+        return { text: stripSpeakTags(cleanedText), estimatedIntake };
     } else {
         console.warn("Gemini response.text was empty or undefined", response);
-        return "No he podido generar una respuesta esta vez. Por favor, inténtalo de nuevo.";
+        return { text: "No he podido generar una respuesta esta vez. Por favor, inténtalo de nuevo." };
     }
 
   } catch (err: unknown) {
     console.error("Error calling Gemini API:", err);
+    let message = "Se produjo un error desconocido al comunicarse con el servicio de IA.";
     if (err instanceof Error) {
-        let message = err.message;
+        message = err.message;
         if ((err as any).details) { 
             message = `${message} (Details: ${(err as any).details})`;
         }
-
         if (message.includes("API key not valid")) {
-             throw new Error("La clave API de Gemini no es válida. Por favor, verifica la configuración en AI Studio.");
+             message = "La clave API de Gemini no es válida. Por favor, verifica la configuración.";
         } else if (message.includes("SAFETY")) {
-             throw new Error("La solicitud fue bloqueada debido a políticas de seguridad. Intenta reformular tu pregunta.");
+             message = "La solicitud fue bloqueada debido a políticas de seguridad. Intenta reformular tu pregunta.";
         } else if (message.includes("ReadableStream uploading is not supported")) {
-             throw new Error(`Error de la API de IA: Problema con el envío de datos multimedia (posiblemente un problema del proxy o del servidor): ${message}`);
+             message = `Error de la API de IA: Problema con el envío de datos multimedia: ${message}`;
+        } else {
+             message = `Error de la API de IA: ${message}`;
         }
-         else {
-             throw new Error(`Error de la API de IA: ${message}`);
-        }
-    } else {
-        throw new Error("Se produjo un error desconocido al comunicarse con el servicio de IA.");
     }
+    throw new Error(message);
   }
-  throw new Error("Unexpected fall-through in generateNutriKickResponse.");
+};
+
+const stripSpeakTags = (text: string): string => {
+  let cleanedText = text;
+  cleanedText = cleanedText.replace(/<speak_ack>.*?<\/speak_ack>/gs, '').trim();
+  cleanedText = cleanedText.replace(/<speak_next_q>.*?<\/speak_next_q>/gs, '').trim();
+  return cleanedText.replace(/\n\s*\n/g, '\n'); 
 };
