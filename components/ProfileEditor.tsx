@@ -1,23 +1,24 @@
-
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   UserProfile, Gender, FootballPosition, TrainingLoad, TrainingFrequency, PersonalGoal,
   DietaryApproachOptions, DietaryRestrictionOptions, 
   WellnessFocusAreaOptions, MoodTodayOptions, TrainedTodayOptions, HadBreakfastOptions, EnergyLevelOptions,
-  SportsDiscipline, BasketballPosition, BaseballPosition, VolleyballPosition, AthleticGoalOptions
+  SportsDiscipline, BasketballPosition, BaseballPosition, VolleyballPosition, AthleticGoalOptions,
+  SleepQualityOptions // Import SleepQualityOptions
 } from '../types';
-import { TrashIcon } from './Icons'; // Added TrashIcon
+import { TrashIcon } from './Icons';
 
 interface ProfileEditorProps {
   initialProfile: UserProfile;
   onUpdateProfile: (profile: UserProfile, isMainUpdate: boolean) => void;
   onEditingComplete: () => void;
   isActive: boolean;
-  onClearCache: () => void; // New prop for clearing cache
+  onClearCache: () => void;
+  isGuest: boolean; // New prop
 }
 
 interface ValidationError {
-  field: string; // Corresponds to the input ID
+  field: string;
   message: string;
 }
 
@@ -49,6 +50,8 @@ const localInitialDefaultUserProfile: UserProfile = {
   trainedToday: '',
   hadBreakfast: '',
   energyLevel: '',
+  sleepHours: '', // Added
+  sleepQuality: "", // Added
   lastCheckInTimestamp: undefined,
 };
 
@@ -151,7 +154,7 @@ const getMainProfileValidationErrors = (profile: UserProfile, localPhonePart?: s
   const errors: ValidationError[] = [];
   const ageNum = parseInt(profile.age);
   const weightNum = parseFloat(profile.weight);
-  const heightNum = parseFloat(profile.height);
+  const heightNum = parseInt(profile.height);
 
   if (!profile.name?.trim()) errors.push({ field: "name", message: "El nombre completo es requerido." });
   if (!profile.email?.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(profile.email)) {
@@ -174,11 +177,11 @@ const getMainProfileValidationErrors = (profile: UserProfile, localPhonePart?: s
 
   if (!profile.height || isNaN(heightNum) || heightNum <= 0) {
     errors.push({ field: "height", message: "Ingresa una altura válida en centímetros." });
-  } else if (heightNum > 0 && heightNum < 3) { // Check for likely meter input (e.g., 1.75)
+  } else if (heightNum > 0 && heightNum < 3) { 
     errors.push({ field: "height", message: `Altura (${profile.height}) parece estar en metros. Ingresa en centímetros (Ej: 175 para 1.75m).` });
-  } else if (heightNum < 60) { // Check if too low, even if in cm
+  } else if (heightNum < 60) { 
     errors.push({ field: "height", message: `Altura (${profile.height} cm) es muy baja. Si es correcta, podría afectar los cálculos. Verifica si es un error.` });
-  } else if (heightNum > 250) { // Check if too high
+  } else if (heightNum > 250) { 
     errors.push({ field: "height", message: "Ingresa una altura válida (hasta 250 cm)." });
   }
   
@@ -243,13 +246,22 @@ const getInitialEditorProfileState = (initialPropsProfile: UserProfile): UserPro
     profileBase.trainedToday = initialPropsProfile.trainedToday || '';
     profileBase.hadBreakfast = initialPropsProfile.hadBreakfast || '';
     profileBase.energyLevel = initialPropsProfile.energyLevel || '';
+    profileBase.sleepHours = initialPropsProfile.sleepHours || '';
+    profileBase.sleepQuality = initialPropsProfile.sleepQuality || "";
     profileBase.lastCheckInTimestamp = initialPropsProfile.lastCheckInTimestamp || undefined;
 
     return profileBase;
 };
 
 
-export const ProfileEditor: React.FC<ProfileEditorProps> = ({ initialProfile, onUpdateProfile, onEditingComplete, isActive, onClearCache }) => {
+export const ProfileEditor: React.FC<ProfileEditorProps> = ({ 
+  initialProfile, 
+  onUpdateProfile, 
+  onEditingComplete, 
+  isActive, 
+  onClearCache,
+  isGuest // Destructure new prop
+}) => {
   const [profile, setProfile] = useState<UserProfile>(() => getInitialEditorProfileState(initialProfile));
   const [isAthlete, setIsAthlete] = useState<boolean>(() => typeof initialProfile.isAthlete === 'boolean' ? initialProfile.isAthlete : false);
   
@@ -267,33 +279,41 @@ export const ProfileEditor: React.FC<ProfileEditorProps> = ({ initialProfile, on
   const formRef = useRef<HTMLFormElement>(null);
 
   useEffect(() => {
+    if (isGuest) return; // Don't run profile logic for guests
     const newResolvedProfile = getInitialEditorProfileState(initialProfile);
     setProfile(newResolvedProfile);
     setIsAthlete(newResolvedProfile.isAthlete);
     const { countryCode, localPart } = splitPhoneNumber(initialProfile.phone);
     setLocalPhoneCountryCode(countryCode);
     setLocalPhonePart(localPart);
-    setValidationErrors([]); // Clear errors when initial profile changes
-  }, [initialProfile]);
+    setValidationErrors([]); 
+  }, [initialProfile, isGuest]);
 
   useEffect(() => {
+    if (isGuest) return;
     if (isActive) {
       setShowDailyCheckInSection(false);
-      setValidationErrors([]); // Clear errors when tab becomes active
+      setValidationErrors([]); 
     }
-  }, [isActive]); 
+  }, [isActive, isGuest]); 
   
   useEffect(() => {
+    if (isGuest) return;
     const sanitizedLocalPart = localPhonePart.replace(/\D/g, ''); 
     const fullPhoneNumber = localPhoneCountryCode + sanitizedLocalPart;
     setProfile(prev => ({ ...prev, phone: fullPhoneNumber }));
-  }, [localPhoneCountryCode, localPhonePart]);
+  }, [localPhoneCountryCode, localPhonePart, isGuest]);
 
   useEffect(() => {
+    if (isGuest) {
+        setIsSubmitEnabled(false);
+        return;
+    }
     setIsSubmitEnabled(getMainProfileValidationErrors(profile, localPhonePart).length === 0);
-  }, [profile, localPhonePart]);
+  }, [profile, localPhonePart, isGuest]);
 
   useEffect(() => {
+    if (isGuest) return;
     if (profile.isAthlete) {
       const discipline = profile.sportsDiscipline;
       if (discipline && discipline !== SportsDiscipline.Other) {
@@ -314,9 +334,10 @@ export const ProfileEditor: React.FC<ProfileEditorProps> = ({ initialProfile, on
       setShowPositionField(false);
       setPositionInputType('none');
     }
-  }, [profile.isAthlete, profile.sportsDiscipline]);
+  }, [profile.isAthlete, profile.sportsDiscipline, isGuest]);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
+    if (isGuest) return;
     const { name, value } = e.target;
     
     if (name === "localPhoneCountryCode") {
@@ -342,6 +363,7 @@ export const ProfileEditor: React.FC<ProfileEditorProps> = ({ initialProfile, on
     e: React.ChangeEvent<HTMLInputElement>, 
     fieldName: 'dietaryApproaches' | 'dietaryRestrictions' | 'wellnessFocusAreas' | 'athleticGoals'
   ) => {
+    if (isGuest) return;
     const { value, checked } = e.target;
     setProfile(prev => {
       const currentValues = prev[fieldName] || [];
@@ -353,6 +375,7 @@ export const ProfileEditor: React.FC<ProfileEditorProps> = ({ initialProfile, on
   };
 
   const handleIsAthleteChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (isGuest) return;
     const newIsAthleteValue = e.target.value === 'yes';
     setIsAthlete(newIsAthleteValue);
     setProfile(prev => {
@@ -379,6 +402,7 @@ export const ProfileEditor: React.FC<ProfileEditorProps> = ({ initialProfile, on
   };
 
   const handleMainSubmit = (e: React.FormEvent) => {
+    if (isGuest) return;
     e.preventDefault();
     let profileToUpdate = { ...profile };
     profileToUpdate.phone = localPhoneCountryCode + localPhonePart.replace(/\D/g, ''); 
@@ -403,6 +427,7 @@ export const ProfileEditor: React.FC<ProfileEditorProps> = ({ initialProfile, on
   };
 
   const handleDailyCheckInSave = () => {
+    if (isGuest) return;
     const profileWithCurrentPhone = {
         ...profile,
         phone: localPhoneCountryCode + localPhonePart.replace(/\D/g, '')
@@ -412,6 +437,7 @@ export const ProfileEditor: React.FC<ProfileEditorProps> = ({ initialProfile, on
   };
 
   const handleSkipDailyCheckIn = () => {
+    if (isGuest) return;
     onEditingComplete();
   };
   
@@ -422,8 +448,6 @@ export const ProfileEditor: React.FC<ProfileEditorProps> = ({ initialProfile, on
   const checkboxInputClasses = "form-checkbox h-4 w-4 text-orange-500 bg-slate-500 border-slate-400 rounded focus:ring-orange-500 focus:ring-offset-slate-700";
   const primaryButtonClasses = "w-full flex justify-center py-3 px-4 border border-transparent rounded-lg shadow-md text-sm font-medium text-white bg-orange-600 hover:bg-orange-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-slate-700 focus:ring-orange-600 transition-transform transform hover:scale-105 active:scale-95 disabled:bg-slate-500 disabled:text-slate-400 disabled:cursor-not-allowed disabled:hover:scale-100";
   const secondaryButtonClasses = "w-full flex justify-center py-2 px-4 border border-slate-500 rounded-lg shadow-sm text-sm font-medium text-slate-200 bg-slate-600 hover:bg-slate-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-slate-700 focus:ring-orange-500 transition-colors";
-  const destructiveButtonClasses = "w-full flex items-center justify-center py-2 px-4 border border-red-700 rounded-lg shadow-sm text-sm font-medium text-red-300 bg-red-900/50 hover:bg-red-800/70 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-slate-700 focus:ring-red-600 transition-colors";
-
 
   const focusField = (fieldId: string) => {
     const fieldElement = document.getElementById(fieldId);
@@ -432,6 +456,17 @@ export const ProfileEditor: React.FC<ProfileEditorProps> = ({ initialProfile, on
       fieldElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
   };
+
+  if (isGuest) { // Guests should not see the profile editor
+    return (
+        <div className="p-4 md:p-6 bg-slate-700 text-slate-200 rounded-lg shadow-xl animate-fadeIn text-center">
+            <h2 className="text-xl font-semibold text-slate-100 mb-4">Modo Invitado</h2>
+            <p className="text-slate-300">
+                Para editar y guardar tu perfil, necesitas iniciar sesión o crear una cuenta.
+            </p>
+        </div>
+    );
+  }
 
   return (
     <div className="p-4 md:p-6 bg-slate-700 text-slate-200 rounded-lg shadow-xl animate-fadeIn">
@@ -620,24 +655,28 @@ export const ProfileEditor: React.FC<ProfileEditorProps> = ({ initialProfile, on
               <div className="space-y-6 mt-4"> 
                 <div>
                   <label className="block text-sm font-medium text-slate-300 mb-2">Preferencias Alimentarias / Enfoques Dietéticos 🥗</label>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-48 overflow-y-auto custom-scrollbar pr-2">
-                    {Object.values(DietaryApproachOptions).map(option => (
-                      <label key={option} className="flex items-center space-x-2 p-1.5 rounded-md hover:bg-slate-600 transition-colors cursor-pointer">
-                        <input type="checkbox" name="dietaryApproaches" value={option} checked={(profile.dietaryApproaches || []).includes(option)} onChange={(e) => handleCheckboxGroupChange(e, 'dietaryApproaches')} className={checkboxInputClasses}/>
-                        <span className={checkboxLabelClasses}>{option}</span>
-                      </label>
-                    ))}
+                  <div className="p-3 border border-slate-500 rounded-md bg-slate-600/30 max-h-48 overflow-y-auto custom-scrollbar">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {Object.values(DietaryApproachOptions).map(option => (
+                        <label key={option} className="flex items-center space-x-2 p-2 rounded-md hover:bg-slate-600/70 transition-colors cursor-pointer">
+                          <input type="checkbox" name="dietaryApproaches" value={option} checked={(profile.dietaryApproaches || []).includes(option)} onChange={(e) => handleCheckboxGroupChange(e, 'dietaryApproaches')} className={checkboxInputClasses}/>
+                          <span className={checkboxLabelClasses}>{option}</span>
+                        </label>
+                      ))}
+                    </div>
                   </div>
                 </div>
                  <div>
                   <label className="block text-sm font-medium text-slate-300 mb-2">Restricciones Alimentarias o Alergias 🚫</label>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-48 overflow-y-auto custom-scrollbar pr-2">
-                    {Object.values(DietaryRestrictionOptions).map(option => (
-                      <label key={option} className="flex items-center space-x-2 p-1.5 rounded-md hover:bg-slate-600 transition-colors cursor-pointer">
-                        <input type="checkbox" name="dietaryRestrictions" value={option} checked={(profile.dietaryRestrictions || []).includes(option)} onChange={(e) => handleCheckboxGroupChange(e, 'dietaryRestrictions')} className={checkboxInputClasses}/>
-                        <span className={checkboxLabelClasses}>{option}</span>
-                      </label>
-                    ))}
+                  <div className="p-3 border border-slate-500 rounded-md bg-slate-600/30 max-h-48 overflow-y-auto custom-scrollbar">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {Object.values(DietaryRestrictionOptions).map(option => (
+                        <label key={option} className="flex items-center space-x-2 p-2 rounded-md hover:bg-slate-600/70 transition-colors cursor-pointer">
+                          <input type="checkbox" name="dietaryRestrictions" value={option} checked={(profile.dietaryRestrictions || []).includes(option)} onChange={(e) => handleCheckboxGroupChange(e, 'dietaryRestrictions')} className={checkboxInputClasses}/>
+                          <span className={checkboxLabelClasses}>{option}</span>
+                        </label>
+                      ))}
+                    </div>
                   </div>
                 </div>
                 <div>
@@ -657,13 +696,15 @@ export const ProfileEditor: React.FC<ProfileEditorProps> = ({ initialProfile, on
                 {!isAthlete && ( 
                   <div className="animate-fadeIn">
                     <label className="block text-sm font-medium text-slate-300 mb-2">Áreas de Bienestar de Interés ❤️‍🩹</label>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-48 overflow-y-auto custom-scrollbar pr-2">
-                      {Object.values(WellnessFocusAreaOptions).map(option => (
-                        <label key={option} className="flex items-center space-x-2 p-1.5 rounded-md hover:bg-slate-600 transition-colors cursor-pointer">
-                          <input type="checkbox" name="wellnessFocusAreas" value={option} checked={(profile.wellnessFocusAreas || []).includes(option)} onChange={(e) => handleCheckboxGroupChange(e, 'wellnessFocusAreas')} className={checkboxInputClasses}/>
-                          <span className={checkboxLabelClasses}>{option}</span>
-                        </label>
-                      ))}
+                    <div className="p-3 border border-slate-500 rounded-md bg-slate-600/30 max-h-48 overflow-y-auto custom-scrollbar">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        {Object.values(WellnessFocusAreaOptions).map(option => (
+                          <label key={option} className="flex items-center space-x-2 p-2 rounded-md hover:bg-slate-600/70 transition-colors cursor-pointer">
+                            <input type="checkbox" name="wellnessFocusAreas" value={option} checked={(profile.wellnessFocusAreas || []).includes(option)} onChange={(e) => handleCheckboxGroupChange(e, 'wellnessFocusAreas')} className={checkboxInputClasses}/>
+                            <span className={checkboxLabelClasses}>{option}</span>
+                          </label>
+                        ))}
+                      </div>
                     </div>
                   </div>
                 )}
@@ -674,25 +715,12 @@ export const ProfileEditor: React.FC<ProfileEditorProps> = ({ initialProfile, on
                 {isSubmitEnabled || validationErrors.length === 0 ? 'Actualizar Perfil y Ver Check-in Diario ➡️' : 'Revisa los campos marcados (*)'}
               </button>
             </div>
-            <div className="mt-8 pt-6 border-t border-slate-600">
-                <button 
-                  type="button" 
-                  onClick={onClearCache} 
-                  className={destructiveButtonClasses}
-                  aria-label="Borrar datos locales y empezar de nuevo"
-                >
-                  <TrashIcon className="w-5 h-5 mr-2" />
-                  Borrar Datos Locales y Empezar de Nuevo
-                </button>
-                <p className="text-xs text-slate-400 mt-2 text-center">
-                  Esto eliminará tu perfil, historial de chat y registro de comidas de este navegador.
-                </p>
-            </div>
+            {/* Removed "Borrar datos locales" button and its descriptive text */}
           </>
         )}
       </form>
 
-      {showDailyCheckInSection && (
+      {showDailyCheckInSection && !isGuest && (
         <div className="animate-fadeIn mt-8 pt-6 border-t border-slate-600">
            <p className="text-sm text-slate-300 mb-4">¡Perfil principal guardado! Ahora, si lo deseas, puedes agregar tu check-in de hoy.</p>
           <fieldset className="border border-slate-600 p-4 rounded-md">
@@ -705,7 +733,10 @@ export const ProfileEditor: React.FC<ProfileEditorProps> = ({ initialProfile, on
               </div>
               <div>
                 <label htmlFor="trainedToday" className="block text-sm font-medium text-slate-300 mb-1">¿Entrenamiento de hoy? 💪</label>
-                <select name="trainedToday" id="trainedToday" value={profile.trainedToday || ''} onChange={handleChange} className={commonSelectClasses}> <option value="">No especificar</option> {Object.values(TrainedTodayOptions).map(opt => <option key={opt} value={opt}>{opt}</option>)} </select>
+                <select name="trainedToday" id="trainedToday" value={profile.trainedToday || ''} onChange={handleChange} className={commonSelectClasses}>
+                  <option value="">No especificar</option>
+                  {Object.values(TrainedTodayOptions).map(opt => <option key={opt} value={opt}>{opt}</option>)}
+                </select>
               </div>
               <div>
                 <label htmlFor="hadBreakfast" className="block text-sm font-medium text-slate-300 mb-1">¿Desayunaste? 🥞</label>
@@ -714,6 +745,17 @@ export const ProfileEditor: React.FC<ProfileEditorProps> = ({ initialProfile, on
               <div>
                 <label htmlFor="energyLevel" className="block text-sm font-medium text-slate-300 mb-1">Nivel de Energía Hoy ⚡</label>
                 <select name="energyLevel" id="energyLevel" value={profile.energyLevel || ''} onChange={handleChange} className={commonSelectClasses}> <option value="">No especificar</option> {Object.values(EnergyLevelOptions).map(opt => <option key={opt} value={opt}>{opt}</option>)} </select>
+              </div>
+              <div>
+                <label htmlFor="sleepHours" className="block text-sm font-medium text-slate-300 mb-1">Horas de Sueño (aprox.) 😴</label>
+                <input type="text" name="sleepHours" id="sleepHours" value={profile.sleepHours || ''} onChange={handleChange} className={commonInputClasses} placeholder="Ej: 7, 6.5, 7-8" />
+              </div>
+              <div>
+                <label htmlFor="sleepQuality" className="block text-sm font-medium text-slate-300 mb-1">Calidad del Sueño Percibida ✨</label>
+                <select name="sleepQuality" id="sleepQuality" value={profile.sleepQuality || ''} onChange={handleChange} className={commonSelectClasses}>
+                  <option value="">No especificar</option>
+                  {Object.values(SleepQualityOptions).map(opt => <option key={opt} value={opt}>{opt}</option>)}
+                </select>
               </div>
             </div>
           </fieldset>

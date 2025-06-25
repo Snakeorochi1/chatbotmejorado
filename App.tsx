@@ -1,19 +1,31 @@
 
 import React, { useState, useCallback, useEffect, useRef } from 'react';
-import { UserProfile, Message, Gender, FootballPosition, TrainingLoad, TrainingFrequency, PersonalGoal, DailyIntake, NutrientTargets, EstimatedFoodIntake, SportsDiscipline, AthleticGoalOptions, DietaryApproachOptions, DietaryRestrictionOptions } from './types';
+import { UserProfile, Message, Gender, SportsDiscipline, TrainingLoad, TrainingFrequency, PersonalGoal, DailyIntake, NutrientTargets, EstimatedFoodIntake, SupabaseSession, AthleticGoalOptions } from './types';
 import { generateNutriKickResponse, GeminiServiceResponse } from './services/geminiService';
-import { saveUserProfileToSupabase, getSupabaseClientStatus } from './services/supabaseService';
+import { 
+  saveUserProfileToSupabase, 
+  loadUserProfileFromSupabase,
+  getSupabaseClientStatus,
+  signUpUser,
+  signInUser,
+  signOutUser,
+  getCurrentUserSession,
+  onAuthStateChange as supabaseOnAuthStateChange
+} from './services/supabaseService';
 import { ProfileEditor } from './components/ProfileEditor';
 import { ChatWindow } from './components/ChatWindow';
-import { DISCLAIMER_TEXT } from './constants';
-import { LogoIcon, ProfileIcon, ChatIcon } from './components/Icons';
+import { AuthForm } from './components/AuthForm';
+import { AdminPanel } from './components/AdminPanel'; // Import AdminPanel
+import { DISCLAIMER_TEXT, ADMIN_EMAILS } from './constants'; // Import ADMIN_EMAILS
+import { LogoIcon, ProfileIcon, ChatIcon, LogoutIcon, LoginIcon, CloseIcon, AdminIcon } from './components/Icons'; // Added AdminIcon
 import { calculateIdealBodyWeightRange, calculateMacronutrientTargets } from './nutritionCalculators';
+import { LoadingSpinner } from './components/LoadingSpinner';
 
-const USER_PROFILE_STORAGE_KEY = 'nutrikick_userProfile_v3'; 
-const CHAT_MESSAGES_STORAGE_KEY = 'nutrikick_chatMessages_v2';
-const DAILY_INTAKE_STORAGE_KEY = 'nutrikick_dailyIntake_v2';
-const NUTRIENT_TARGETS_STORAGE_KEY = 'nutrikick_nutrientTargets_v2';
-const SUPABASE_USER_PROFILE_ROW_ID_KEY = 'nutrikick_supabase_profile_row_id_v3';
+const USER_PROFILE_STORAGE_KEY = 'nutrikick_userProfile_v3_auth'; // Cache key, now per user implicitly
+const CHAT_MESSAGES_STORAGE_KEY_PREFIX = 'nutrikick_chatMessages_v3_feedback_'; // Incremented version for feedback
+const GUEST_CHAT_MESSAGES_STORAGE_KEY = 'nutrikick_chatMessages_guest_v2_feedback_'; // Incremented version for feedback
+const DAILY_INTAKE_STORAGE_KEY_PREFIX = 'nutrikick_dailyIntake_v2_'; // Per user
+const NUTRIENT_TARGETS_STORAGE_KEY_PREFIX = 'nutrikick_nutrientTargets_v2_'; // Per user
 
 
 const initialDefaultUserProfile: UserProfile = {
@@ -32,8 +44,8 @@ const initialDefaultUserProfile: UserProfile = {
   athleticGoals: [], 
   trainingFrequency: TrainingFrequency.NoneOrRarely,
   goals: "" as PersonalGoal | "",
-  dietaryApproaches: [], // New
-  dietaryRestrictions: [], // New
+  dietaryApproaches: [], 
+  dietaryRestrictions: [], 
   currentSupplementUsage: "Prefiero no decirlo",
   supplementInterestOrUsageDetails: '',
   wellnessFocusAreas: [],
@@ -44,7 +56,9 @@ const initialDefaultUserProfile: UserProfile = {
   lastCheckInTimestamp: undefined,
 };
 
-const INITIAL_WELCOME_MESSAGE_TEXT = "¡Hola! 👋 Soy Nutri-Kick AI. Para poder ayudarte de la mejor manera y personalizar mis consejos, necesito conocerte un poco. **Por favor, haz clic en el icono del perfil (👤) en la esquina superior derecha para completar tus datos.** Una vez que tu perfil esté actualizado, podré calcular tus necesidades calóricas estimadas, tus objetivos de macronutrientes y ayudarte a registrar tus comidas. También puedes usar el micrófono 🎤 o la cámara 📸 para interactuar. ¿Comenzamos? 🚀";
+const GUEST_INITIAL_WELCOME_MESSAGE_TEXT = "¡Hola! 👋 Soy Nutri-Kick AI. Estás navegando como invitado/a. Puedo ofrecerte información general sobre nutrición, fitness y hábitos saludables. Para un análisis personalizado, registrar tus comidas con la cámara 📸, guardar tu progreso y obtener metas específicas, ¡te invito a crear una cuenta gratuita o iniciar sesión! ¿Cómo puedo ayudarte hoy?";
+const AUTH_WELCOME_MESSAGE_TEXT_NO_PROFILE = "¡Bienvenido/a a Nutri-Kick AI! Parece que es tu primera vez aquí o aún no has completado tu perfil. **Haz clic en el icono del perfil (👤) para configurarlo** y que pueda ayudarte mejor. 🚀";
+
 
 const getTodayDateString = (): string => {
   const today = new Date();
@@ -68,6 +82,9 @@ const initialDefaultNutrientTargets: NutrientTargets = {
   carbs: null,
   fats: null,
 };
+
+const getUserStorageKey = (prefix: string, userId?: string | null) => userId ? `${prefix}${userId}` : null;
+
 
 function blobToBase64(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -102,56 +119,17 @@ function getSupportedMimeType(): string | undefined {
 }
 
 const App: React.FC = () => {
-  const isInitialLoad = useRef(true);
+  const [currentSession, setCurrentSession] = useState<SupabaseSession | null>(null);
+  const [isGuestSession, setIsGuestSession] = useState<boolean>(false);
+  const [isAdmin, setIsAdmin] = useState<boolean>(false); // New state for admin status
+  const [showAuthModal, setShowAuthModal] = useState<boolean>(false);
+  const [authLoading, setAuthLoading] = useState<boolean>(true);
+  const [authError, setAuthError] = useState<string | null>(null);
 
-  const [userProfile, setUserProfile] = useState<UserProfile>(() => {
-    try {
-      const storedProfile = localStorage.getItem(USER_PROFILE_STORAGE_KEY);
-      if (storedProfile) {
-        const parsedProfile = JSON.parse(storedProfile);
-        // Ensure new fields exist if loading old profile structure
-        if (!parsedProfile.dietaryApproaches) parsedProfile.dietaryApproaches = [];
-        if (!parsedProfile.dietaryRestrictions) parsedProfile.dietaryRestrictions = [];
-        delete parsedProfile.dietaryPreferencesAndRestrictions; // Remove old field
-        return { ...initialDefaultUserProfile, ...parsedProfile };
-      }
-    } catch (error) { console.error("Error loading user profile from localStorage:", error); }
-    return { ...initialDefaultUserProfile };
-  });
-
-  const [messages, setMessages] = useState<Message[]>(() => {
-    try {
-      const storedMessages = localStorage.getItem(CHAT_MESSAGES_STORAGE_KEY);
-      if (storedMessages) {
-        const parsedMessages: Message[] = JSON.parse(storedMessages);
-        return parsedMessages.map(msg => ({ ...msg, timestamp: new Date(msg.timestamp) }));
-      }
-    } catch (error) { console.error("Error loading messages from localStorage:", error); }
-    return [];
-  });
-
-  const [dailyIntake, setDailyIntake] = useState<DailyIntake>(() => {
-    try {
-      const storedIntake = localStorage.getItem(DAILY_INTAKE_STORAGE_KEY);
-      if (storedIntake) {
-        const parsedIntake: DailyIntake = JSON.parse(storedIntake);
-        if (parsedIntake.date === getTodayDateString()) {
-          return parsedIntake;
-        }
-      }
-    } catch (error) { console.error("Error loading daily intake from localStorage:", error); }
-    return { ...initialDefaultDailyIntake }; 
-  });
-
-  const [nutrientTargets, setNutrientTargets] = useState<NutrientTargets>(() => {
-    try {
-      const storedTargets = localStorage.getItem(NUTRIENT_TARGETS_STORAGE_KEY);
-      if (storedTargets) {
-        return JSON.parse(storedTargets);
-      }
-    } catch (error) { console.error("Error loading nutrient targets from localStorage:", error); }
-    return { ...initialDefaultNutrientTargets };
-  });
+  const [userProfile, setUserProfile] = useState<UserProfile>({ ...initialDefaultUserProfile });
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [dailyIntake, setDailyIntake] = useState<DailyIntake>({ ...initialDefaultDailyIntake });
+  const [nutrientTargets, setNutrientTargets] = useState<NutrientTargets>({ ...initialDefaultNutrientTargets });
   
   const [currentBMR, setCurrentBMR] = useState<number | null>(null);
   const [currentTDEE, setCurrentTDEE] = useState<number | null>(null);
@@ -159,7 +137,7 @@ const App: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null); 
-  const [activeTab, setActiveTab] = useState<'chat' | 'profile'>('chat');
+  const [activeTab, setActiveTab] = useState<'chat' | 'profile' | 'admin'>('chat'); // Added 'admin' tab
 
   const [isRecording, setIsRecording] = useState(false);
   const [micPermissionError, setMicPermissionError] = useState<string | null>(null);
@@ -180,46 +158,204 @@ const App: React.FC = () => {
 
   const [dbStatus, setDbStatus] = useState<'checking' | 'ok' | 'error'>('checking'); 
   const [dbErrorDetails, setDbErrorDetails] = useState<string | null>(null);
+  
+  const isProfileConsideredEmpty = (profile: UserProfile): boolean => {
+    return !profile.name && !profile.age && !profile.weight && !profile.height && !profile.gender;
+  };
 
   useEffect(() => {
     const supabaseStatus = getSupabaseClientStatus();
     if (!supabaseStatus.clientInitialized) {
-        console.error("App.tsx: Supabase client not initialized.", supabaseStatus.error);
         setDbStatus('error');
         setDbErrorDetails(supabaseStatus.detailedMessage || `Error fatal: El cliente Supabase no se pudo inicializar.`);
     } else {
         setDbStatus('ok');
         setDbErrorDetails(null);
     }
+  }, []);
 
-    if (dailyIntake.date !== getTodayDateString()) {
-        console.log("Date changed, resetting daily intake.");
-        setDailyIntake({ ...initialDefaultDailyIntake, date: getTodayDateString() });
-    }
+  useEffect(() => {
+    if (dbStatus !== 'ok') return;
+
+    setAuthLoading(true);
+    getCurrentUserSession().then(session => {
+      if (session) {
+        setCurrentSession(session);
+        setIsGuestSession(false);
+        setIsAdmin(ADMIN_EMAILS.includes(session.user.email || ''));
+      } else {
+        setIsGuestSession(true); // No session, start as guest
+        setIsAdmin(false);
+        const storedGuestMessages = localStorage.getItem(GUEST_CHAT_MESSAGES_STORAGE_KEY);
+        if (storedGuestMessages) {
+            const parsedMessages: Message[] = JSON.parse(storedGuestMessages);
+            setMessages(parsedMessages.map(msg => ({ ...msg, timestamp: new Date(msg.timestamp) })));
+        } else {
+            setMessages([{ id: crypto.randomUUID(), sender: 'ai', text: GUEST_INITIAL_WELCOME_MESSAGE_TEXT, timestamp: new Date(), feedback: null }]);
+        }
+      }
+      setAuthLoading(false);
+    });
+
+    const unsubscribe = supabaseOnAuthStateChange((session) => {
+      setCurrentSession(session);
+      if (session) { // User logged in or signed up
+        setIsGuestSession(false);
+        setShowAuthModal(false);
+        setIsAdmin(ADMIN_EMAILS.includes(session.user.email || ''));
+        // Clear guest chat when user logs in/signs up
+        localStorage.removeItem(GUEST_CHAT_MESSAGES_STORAGE_KEY);
+        // Reset messages, profile related states will be handled by the next useEffect
+        setMessages([]); 
+        setUserProfile({ ...initialDefaultUserProfile });
+        setDailyIntake({ ...initialDefaultDailyIntake });
+        setNutrientTargets({ ...initialDefaultNutrientTargets });
+        setCurrentBMR(null);
+        setCurrentTDEE(null);
+      } else { // User logged out
+        setIsGuestSession(true);
+        setIsAdmin(false);
+        setUserProfile({ ...initialDefaultUserProfile });
+        setDailyIntake({ ...initialDefaultDailyIntake });
+        setNutrientTargets({ ...initialDefaultNutrientTargets });
+        setCurrentBMR(null);
+        setCurrentTDEE(null);
+        setActiveTab('chat');
+        setMessages([{ id: crypto.randomUUID(), sender: 'ai', text: GUEST_INITIAL_WELCOME_MESSAGE_TEXT, timestamp: new Date(), feedback: null }]);
+      }
+    });
+    return () => unsubscribe();
+  }, [dbStatus]);
+
+
+  useEffect(() => {
+    if (isGuestSession || !currentSession?.user?.id) return;
+
+    const userId = currentSession.user.id;
+    loadUserProfileFromSupabase(userId).then(profileFromDb => {
+      if (profileFromDb) {
+        setUserProfile(profileFromDb);
+      } else {
+        // If profileFromDb is null (new user), ensure email from session is populated
+        setUserProfile(prev => ({ ...initialDefaultUserProfile, email: currentSession.user.email || '' }));
+      }
+    });
+
+    try {
+      const chatKey = getUserStorageKey(CHAT_MESSAGES_STORAGE_KEY_PREFIX, userId);
+      const intakeKey = getUserStorageKey(DAILY_INTAKE_STORAGE_KEY_PREFIX, userId);
+      const targetsKey = getUserStorageKey(NUTRIENT_TARGETS_STORAGE_KEY_PREFIX, userId);
+
+      if (chatKey) {
+        const storedMessages = localStorage.getItem(chatKey);
+        if (storedMessages) {
+          const parsedMessages: Message[] = JSON.parse(storedMessages);
+          setMessages(parsedMessages.map(msg => ({ ...msg, timestamp: new Date(msg.timestamp), feedback: msg.feedback || null })));
+        } else {
+           // If no stored messages, and userProfile is not empty, don't set a welcome message yet.
+           // It will be handled by the next useEffect based on profile emptiness.
+           // If userProfile IS empty, then the welcome message for new authed users will be set.
+           setMessages([]);
+        }
+      }
+      
+      if (intakeKey) {
+        const storedIntake = localStorage.getItem(intakeKey);
+        if (storedIntake) {
+          const parsedIntake: DailyIntake = JSON.parse(storedIntake);
+          if (parsedIntake.date === getTodayDateString()) setDailyIntake(parsedIntake);
+          else setDailyIntake({ ...initialDefaultDailyIntake, date: getTodayDateString() });
+        } else {
+          setDailyIntake({ ...initialDefaultDailyIntake, date: getTodayDateString() });
+        }
+      }
+
+      if (targetsKey) {
+        const storedTargets = localStorage.getItem(targetsKey);
+        if (storedTargets) setNutrientTargets(JSON.parse(storedTargets));
+        else setNutrientTargets({ ...initialDefaultNutrientTargets });
+      }
+
+    } catch (error) { console.error("Error loading user-specific data from localStorage:", error); }
+    
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); 
+  }, [currentSession, isGuestSession, authLoading]); // Added authLoading to dependencies
+  
+  useEffect(() => {
+    // This effect handles setting the initial message for authenticated users.
+    // It runs after userProfile is potentially loaded from DB and messages are loaded from localStorage.
+    if (!isGuestSession && currentSession && messages.length === 0 && !authLoading) {
+      if (isProfileConsideredEmpty(userProfile)) {
+        setMessages([{ id: crypto.randomUUID(), sender: 'ai', text: AUTH_WELCOME_MESSAGE_TEXT_NO_PROFILE, timestamp: new Date(), feedback: null }]);
+      }
+      // If profile is NOT empty and no messages, it implies a returning user with cleared chat, no special message needed.
+    }
+  }, [currentSession, userProfile, messages.length, authLoading, isGuestSession]);
+
+
+  useEffect(() => {
+    if (isGuestSession) {
+        if (messages.length > 0) {
+            localStorage.setItem(GUEST_CHAT_MESSAGES_STORAGE_KEY, JSON.stringify(messages));
+        } else {
+            localStorage.removeItem(GUEST_CHAT_MESSAGES_STORAGE_KEY);
+        }
+        return;
+    }
+
+    if (!currentSession?.user?.id) return;
+    const userId = currentSession.user.id;
+
+    try {
+      const chatKey = getUserStorageKey(CHAT_MESSAGES_STORAGE_KEY_PREFIX, userId);
+      const intakeKey = getUserStorageKey(DAILY_INTAKE_STORAGE_KEY_PREFIX, userId);
+      const targetsKey = getUserStorageKey(NUTRIENT_TARGETS_STORAGE_KEY_PREFIX, userId);
+
+      if (chatKey && messages.length > 0) localStorage.setItem(chatKey, JSON.stringify(messages));
+      else if (chatKey) localStorage.removeItem(chatKey); // Remove if messages are empty for this user
+      
+      if (intakeKey) localStorage.setItem(intakeKey, JSON.stringify(dailyIntake));
+      if (targetsKey) localStorage.setItem(targetsKey, JSON.stringify(nutrientTargets));
+
+    } catch (error) { console.error("Error saving user-specific data to localStorage:", error); }
+  }, [userProfile, messages, dailyIntake, nutrientTargets, currentSession, isGuestSession]);
+
 
   const handleProfileEditingComplete = useCallback(() => {
     setActiveTab('chat');
-    setTimeout(() => chatContainerRef.current?.scrollTo(0, 0), 0);
+    // Scroll logic is now in ChatWindow's useEffect
   }, []);
 
   const handleProfileUpdate = useCallback(async (updatedProfileFromEditor: UserProfile, isMainUpdate: boolean) => {
+    if (isGuestSession || !currentSession?.user?.id) {
+      setError("Debes iniciar sesión para guardar tu perfil.");
+      setTimeout(() => setError(null), 5000);
+      return;
+    }
+    const userId = currentSession.user.id;
     const oldProfile = userProfile; 
     let profileToSave = { ...updatedProfileFromEditor };
+
+    // Ensure email is consistent with the authenticated user if not explicitly changed in form (if form allowed it)
+    if (!profileToSave.email && currentSession.user.email) {
+        profileToSave.email = currentSession.user.email;
+    }
+
 
     if (profileToSave.isAthlete && profileToSave.sportsDiscipline === SportsDiscipline.Other && profileToSave.customSportsDiscipline?.trim()) {
       profileToSave.sportsDiscipline = profileToSave.customSportsDiscipline.trim();
     }
-    profileToSave.customSportsDiscipline = (profileToSave.sportsDiscipline === SportsDiscipline.Other && profileToSave.customSportsDiscipline) 
+     profileToSave.customSportsDiscipline = (profileToSave.sportsDiscipline === SportsDiscipline.Other && profileToSave.customSportsDiscipline) 
                                             ? profileToSave.customSportsDiscipline 
                                             : '';
 
 
     if (isMainUpdate) {
+        // Preserve lastCheckInTimestamp if this is a main profile update, not a daily check-in update
         profileToSave.lastCheckInTimestamp = oldProfile.lastCheckInTimestamp; 
-    } else { 
+    } else { // This is a daily check-in update (from ProfileEditor's second save button)
         let dailyCheckInFieldsActuallyModified = false;
+        // Check if any of the daily check-in specific fields were actually changed
         if (profileToSave.moodToday !== oldProfile.moodToday ||
             profileToSave.trainedToday !== oldProfile.trainedToday ||
             profileToSave.hadBreakfast !== oldProfile.hadBreakfast ||
@@ -228,33 +364,40 @@ const App: React.FC = () => {
         }
         
         if (dailyCheckInFieldsActuallyModified) {
+            // If any daily check-in field has a value, update the timestamp
             if (profileToSave.moodToday || profileToSave.trainedToday || profileToSave.hadBreakfast || profileToSave.energyLevel) {
                 profileToSave.lastCheckInTimestamp = Date.now();
             } else { 
+                // If all daily check-in fields are cleared, remove the timestamp
                 profileToSave.lastCheckInTimestamp = undefined; 
             }
         } else {
+            // If no daily check-in fields were modified, keep the old timestamp
             profileToSave.lastCheckInTimestamp = oldProfile.lastCheckInTimestamp;
         }
     }
 
-    setUserProfile(profileToSave); 
-    setError(null); 
+    setUserProfile(profileToSave); // Optimistic UI update
+    setError(null); // Clear previous errors
 
     try {
-      await saveUserProfileToSupabase(profileToSave);
+      await saveUserProfileToSupabase(profileToSave, userId);
+      setSuccessMessage("Perfil guardado en la nube con éxito. 👍");
+      setTimeout(() => setSuccessMessage(null), 3000);
     } catch (dbError) {
       console.error("Failed to save profile to Supabase:", dbError);
       const message = dbError instanceof Error ? dbError.message : "Error desconocido al guardar en base de datos.";
-      setError(`Error al guardar perfil en la nube: ${message}. Tus cambios locales están guardados.`);
+      setError(`Error al guardar perfil en la nube: ${message}. Tus cambios locales están guardados, pero no en la nube.`);
+      // No rollback of optimistic setUserProfile here, user can retry or data persists locally.
       setTimeout(() => setError(null), 7000);
     }
     
+    // Only generate AI calculation message if it's the main profile update, not just daily check-in
     if (isMainUpdate) {
         let bmr: number | null = null;
         let tdee: number | null = null;
         let activityLevelName = "No especificado";
-        let activityFactor = 1.2; 
+        let activityFactor = 1.2; // Default for sedentary if nothing else matches
         const ageNum = parseInt(profileToSave.age);
         const weightNum = parseFloat(profileToSave.weight);
         const heightNum = parseInt(profileToSave.height);
@@ -263,17 +406,20 @@ const App: React.FC = () => {
         if (isNaN(ageNum) || isNaN(weightNum) || isNaN(heightNum) || ageNum <= 0 || weightNum <= 0 || heightNum <= 0) {
         calculationMessage += "Por favor, completa tu edad, peso y altura con valores válidos para calcular tus necesidades energéticas. 🙏\n\n";
         setCurrentBMR(null); setCurrentTDEE(null); setNutrientTargets(initialDefaultNutrientTargets);
-        } else if (heightNum < 60) { 
+        } else if (heightNum < 60) { // Arbitrary low height check
         calculationMessage += "**¡Atención Especial por Estatura!** 📏\n";
         calculationMessage += "Debido a que la estatura ingresada es menor a 60 cm, los cálculos estándar de requerimientos calóricos pueden no ser precisos y no se realizarán. Te recomiendo consultar a un profesional de la salud o nutricionista para obtener una evaluación adecuada, especialmente si esta estatura es correcta. Si fue un error, por favor, corrígela en tu perfil.\n\n";
         setCurrentBMR(null); setCurrentTDEE(null); setNutrientTargets(initialDefaultNutrientTargets);
-        } else if (ageNum < 18) { 
+        } else if (ageNum < 18) { // Special handling for minors
             calculationMessage += `Aquí tienes un resumen de tus necesidades estimadas:\n`;
+            // Mifflin-St Jeor for BMR
             if (profileToSave.gender === Gender.Male) bmr = (10 * weightNum) + (6.25 * heightNum) - (5 * ageNum) + 5;
             else if (profileToSave.gender === Gender.Female) bmr = (10 * weightNum) + (6.25 * heightNum) - (5 * ageNum) - 161;
             
             if (bmr && bmr > 0) {
-                if (profileToSave.isAthlete) activityFactor = 1.5; else activityFactor = 1.4; 
+                // Simplified activity factor for minors for this example
+                if (profileToSave.isAthlete) activityFactor = 1.5; // Moderately active
+                else activityFactor = 1.4; // Lightly active
                 tdee = bmr * activityFactor;
             }
             calculationMessage += `*   **Metabolismo Basal (MB) Estimado:** ${bmr && bmr > 0 ? bmr.toFixed(0) : 'N/A'} kcal/día 🔥\n`;
@@ -287,417 +433,707 @@ const App: React.FC = () => {
                 calculationMessage += `Tus objetivos aproximados de macronutrientes diarios (que deben ser validados y ajustados por un profesional) podrían ser: Proteína: ${targets.protein.toFixed(0)}g, Carbohidratos: ${targets.carbs.toFixed(0)}g, Grasas: ${targets.fats.toFixed(0)}g.\n\n`;
             }
         } else if (profileToSave.gender === Gender.Male || profileToSave.gender === Gender.Female) {
+        // Mifflin-St Jeor for BMR for adults
         if (profileToSave.gender === Gender.Male) bmr = (10 * weightNum) + (6.25 * heightNum) - (5 * ageNum) + 5;
         else bmr = (10 * weightNum) + (6.25 * heightNum) - (5 * ageNum) - 161;
 
+        // Determine activity factor and name
         if (profileToSave.isAthlete && profileToSave.trainingLoad) {
-            switch (profileToSave.trainingLoad) { 
+            switch (profileToSave.trainingLoad) { // Values typically range 1.2 to 1.9+
             case TrainingLoad.RestDay: activityFactor = 1.2; activityLevelName = "Día de Descanso 😴"; break;
             case TrainingLoad.LightTraining: activityFactor = 1.375; activityLevelName = "Entrenamiento Ligero 👟"; break;
             case TrainingLoad.ModerateTraining: activityFactor = 1.55; activityLevelName = "Entrenamiento Moderado 💪"; break;
             case TrainingLoad.IntenseTraining: activityFactor = 1.725; activityLevelName = "Entrenamiento Intenso 🔥"; break;
             case TrainingLoad.MatchDay: activityFactor = 1.9; activityLevelName = "Día de Partido 🏆"; break;
-            default: activityFactor = 1.55; activityLevelName = "Actividad Moderada (Atleta)"; 
+            default: activityFactor = 1.55; activityLevelName = "Actividad Moderada (Atleta)"; // Fallback for athlete
             }
-        } else if (!profileToSave.isAthlete && profileToSave.trainingFrequency) { 
+        } else if (!profileToSave.isAthlete && profileToSave.trainingFrequency) { // Non-athlete activity
             switch (profileToSave.trainingFrequency) {
-            case TrainingFrequency.NoneOrRarely: activityFactor = 1.3; activityLevelName = "Actividad Ligera (0-1 entrenamientos/sem) 🚶"; break;
-            case TrainingFrequency.TwoToThree: activityFactor = 1.4; activityLevelName = "Actividad Ligera (2-3 entrenamientos/sem) 🚶‍♀️"; break; 
-            case TrainingFrequency.FourTimes: activityFactor = 1.5; activityLevelName = "Actividad Moderada (4 entrenamientos/sem) 🏃"; break;
-            case TrainingFrequency.FiveToSix: activityFactor = 1.7; activityLevelName = "Actividad Alta (5-6 entrenamientos/sem) 🏋️‍♀️"; break; 
-            case TrainingFrequency.DailyOrMore: activityFactor = 1.9; activityLevelName = "Actividad Muy Alta (7+ entrenamientos/sem) 🚀"; break; 
+                case TrainingFrequency.NoneOrRarely: activityFactor = 1.2; activityLevelName = "Sedentario (poco o ningún ejercicio) 🛋️"; break;
+                case TrainingFrequency.TwoToThree: activityFactor = 1.375; activityLevelName = "Ejercicio Ligero (2-3 días/sem) 🚶"; break;
+                case TrainingFrequency.FourTimes: activityFactor = 1.4625; activityLevelName = "Ejercicio Moderado (4 días/sem) 🏃"; break; // Added this case
+                case TrainingFrequency.FiveToSix: activityFactor = 1.55; activityLevelName = "Ejercicio Moderado (5-6 días/sem) 🏋️"; break;
+                case TrainingFrequency.DailyOrMore: activityFactor = 1.725; activityLevelName = "Ejercicio Intenso (diario o más) ⚡"; break;
+                default: activityFactor = 1.375; activityLevelName = "Actividad Ligera (No Atleta)"; // Fallback for non-athlete
             }
         }
-        if (bmr) tdee = bmr * activityFactor;
-        setCurrentBMR(bmr); setCurrentTDEE(tdee);
-        const targets = calculateMacronutrientTargets(profileToSave, tdee);
-        setNutrientTargets(targets);
 
-        calculationMessage += `Aquí tienes un resumen de tus necesidades estimadas:\n`;
-        calculationMessage += `*   **Metabolismo Basal (MB):** ${bmr ? bmr.toFixed(0) : 'N/A'} kcal/día 🔥\n`;
-        calculationMessage += `*   **Requerimiento Calórico Total Estimado (RCTE):** ${tdee ? tdee.toFixed(0) : 'N/A'} kcal/día (basado en MB y tu actividad: ${activityLevelName})🎯\n`;
-        if (targets.calories && targets.protein && targets.carbs && targets.fats) {
-            calculationMessage += `*   **Objetivos de Macronutrientes:** Proteína: ~${targets.protein.toFixed(0)}g, Carbohidratos: ~${targets.carbs.toFixed(0)}g, Grasas: ~${targets.fats.toFixed(0)}g diarios.\n\n`;
-        } else { calculationMessage += `\n`;}
-        calculationMessage += `Considerando tu objetivo "${profileToSave.goals}", estos valores son el punto de partida. \n\n`;
-        
-        let goalSpecificAdvice = "";
-        switch (profileToSave.goals) {
-            case PersonalGoal.LoseWeightHealthy: goalSpecificAdvice = "Para 'Perder peso de forma saludable', usualmente se busca un déficit calórico moderado. ¿Te gustaría explorar estrategias?\n\n"; break;
-            case PersonalGoal.GainMuscleImproveComposition: goalSpecificAdvice = `Para 'Aumentar masa muscular y mejorar composición corporal', un ligero superávit calórico y alcanzar tu objetivo de proteínas (~${targets.protein?.toFixed(0)}g) son claves. ¿Exploramos cómo?\n\n`; break;
-            default: goalSpecificAdvice = `Para tu objetivo de '${profileToSave.goals}', podemos explorar estrategias. ¿Algún aspecto en particular?\n\n`; break;
-        }
-        calculationMessage += goalSpecificAdvice;
+        if (bmr && bmr > 0) {
+            tdee = bmr * activityFactor;
+            calculationMessage += `Aquí tienes un resumen de tus necesidades estimadas, basado en tu actividad como ${activityLevelName.toLowerCase()}:\n`;
+            calculationMessage += `*   **Metabolismo Basal (MB) Estimado:** ${bmr.toFixed(0)} kcal/día 🔥\n`;
+            calculationMessage += `*   **Requerimiento Calórico Total Estimado (RCTE):** ${tdee.toFixed(0)} kcal/día 🎯\n\n`;
+            setCurrentBMR(bmr); setCurrentTDEE(tdee);
+
+            const targets = calculateMacronutrientTargets(profileToSave, tdee);
+            setNutrientTargets(targets);
+            if (targets.calories && targets.protein && targets.carbs && targets.fats) {
+                calculationMessage += `Tus objetivos aproximados de macronutrientes diarios son: Proteína: ${targets.protein.toFixed(0)}g, Carbohidratos: ${targets.carbs.toFixed(0)}g, Grasas: ${targets.fats.toFixed(0)}g.\n\n`;
+            }
         } else {
-        calculationMessage += "Para un cálculo más preciso, selecciona 'Masculino' o 'Femenino' en género.\n\n";
-        setCurrentBMR(null); setCurrentTDEE(null); setNutrientTargets(initialDefaultNutrientTargets);
+            calculationMessage += "No se pudo calcular el MB con los datos proporcionados.\n\n";
+            setCurrentBMR(null); setCurrentTDEE(null); setNutrientTargets(initialDefaultNutrientTargets);
         }
+        calculationMessage += `\nTe recomiendo que un profesional valide estos números y te ayude a crear un plan específico. Estoy aquí para darte ideas generales. ¿Qué te gustaría explorar ahora?`;
+        } // End of adult calculations
         
-        calculationMessage += `\n\n¿Te gustaría saber más sobre qué es el Metabolismo Basal (MB), el Requerimiento Calórico Total Estimado (RCTE), o qué son los macronutrientes? ¡Pregúntame!`;
-
-        const newAiCalcMessage: Message = { id: crypto.randomUUID(), sender: 'ai', text: calculationMessage.trim(), timestamp: new Date() };
-        setMessages(prev => {
-        const filteredMessages = prev.filter(m => m.text !== INITIAL_WELCOME_MESSAGE_TEXT);
-        const updatedMessages = [newAiCalcMessage, ...filteredMessages];
-        if (activeTab === 'chat' || (filteredMessages.length === 0 && prev.length === 1 && prev[0].text === INITIAL_WELCOME_MESSAGE_TEXT)) {
-            setTimeout(() => chatContainerRef.current?.scrollTo(0, 0), 0);
+        // Add calculation message to chat, only if it's not empty and not just the initial part
+        if (calculationMessage.trim() !== `¡Perfil de ${profileToSave.name || 'usuario'} actualizado! 🎉\n\n`.trim()) {
+            setMessages(prev => [...prev, { id: crypto.randomUUID(), sender: 'ai', text: calculationMessage, timestamp: new Date(), feedback: null }]);
         }
-        return updatedMessages;
-        });
-    } 
-   
-  // eslint-disable-next-line react-hooks/exhaustive-deps 
-  }, [userProfile, activeTab]); 
+    } // End of isMainUpdate check
 
-
-  const processAiResponseWithPlaceholders = (
-    baseText: string,
-    mealEstimate?: EstimatedFoodIntake,
-    updatedDailyIntake?: DailyIntake,
-    currentTargets?: NutrientTargets,
-    currentProfile?: UserProfile
-  ): string => {
-    let processedText = baseText;
-    const todayIntake = updatedDailyIntake || dailyIntake;
-    const targets = currentTargets || nutrientTargets;
-    const profile = currentProfile || userProfile;
-
-    if (mealEstimate) {
-        processedText = processedText.replace(/\[LOGGED_FOOD_DESCRIPTION_PLACEHOLDER\]/g, mealEstimate.foodDescription);
-        processedText = processedText.replace(/\[MEAL_CALORIES_ESTIMATED_PLACEHOLDER\]/g, mealEstimate.calories.toFixed(0));
-        processedText = processedText.replace(/\[MEAL_PROTEIN_ESTIMATED_PLACEHOLDER\]/g, mealEstimate.protein.toFixed(0));
-        processedText = processedText.replace(/\[MEAL_CARBS_ESTIMATED_PLACEHOLDER\]/g, mealEstimate.carbs.toFixed(0));
-        processedText = processedText.replace(/\[MEAL_FATS_ESTIMATED_PLACEHOLDER\]/g, mealEstimate.fats.toFixed(0));
-    } else { 
-        processedText = processedText.replace(/Okay, he anotado tu.*?para esta comida:\n\n/s, ""); 
-        processedText = processedText.replace(/\[LOGGED_FOOD_DESCRIPTION_PLACEHOLDER\]/g, "tu comida");
-        processedText = processedText.replace(/\[MEAL_CALORIES_ESTIMATED_PLACEHOLDER\]/g, "N/A");
-        processedText = processedText.replace(/\[MEAL_PROTEIN_ESTIMATED_PLACEHOLDER\]/g, "N/A");
-        processedText = processedText.replace(/\[MEAL_CARBS_ESTIMATED_PLACEHOLDER\]/g, "N/A");
-        processedText = processedText.replace(/\[MEAL_FATS_ESTIMATED_PLACEHOLDER\]/g, "N/A");
+    // Trigger editing complete *after* all state updates from profile saving are done,
+    // including the potential AI message.
+    if(isMainUpdate && !(profileToSave.moodToday || profileToSave.trainedToday || profileToSave.hadBreakfast || profileToSave.energyLevel)){ // Check if daily check-in section will be shown
+        // If it's a main update and daily check-in is not yet shown (because no daily check-in data was entered during the main profile save),
+        // editing is not "complete" until daily check-in is also handled or skipped via its own section.
+        // The ProfileEditor component will manage showing the daily check-in section after main save.
+    } else {
+        // If it's daily check-in update, or main update where daily check-in was already handled/skipped (or data entered).
+        handleProfileEditingComplete();
     }
-
-    processedText = processedText.replace(/\[DAILY_CALORIES_CONSUMED_PLACEHOLDER\]/g, todayIntake.caloriesConsumed.toFixed(0));
-    processedText = processedText.replace(/\[TARGET_CALORIES_PLACEHOLDER\]/g, targets.calories?.toFixed(0) || 'N/A');
-    processedText = processedText.replace(/\[DAILY_PROTEIN_CONSUMED_PLACEHOLDER\]/g, todayIntake.proteinConsumed.toFixed(0));
-    processedText = processedText.replace(/\[TARGET_PROTEIN_PLACEHOLDER\]/g, targets.protein?.toFixed(0) || 'N/A');
-    processedText = processedText.replace(/\[DAILY_CARBS_CONSUMED_PLACEHOLDER\]/g, todayIntake.carbsConsumed.toFixed(0));
-    processedText = processedText.replace(/\[TARGET_CARBS_PLACEHOLDER\]/g, targets.carbs?.toFixed(0) || 'N/A');
-    processedText = processedText.replace(/\[DAILY_FATS_CONSUMED_PLACEHOLDER\]/g, todayIntake.fatsConsumed.toFixed(0));
-    processedText = processedText.replace(/\[TARGET_FATS_PLACEHOLDER\]/g, targets.fats?.toFixed(0) || 'N/A');
-
-    const formatRemainingMessage = (consumed: number, target: number | null, unit: string) => {
-        if (target === null || target <= 0) return "objetivo no establecido.";
-        const remaining = target - consumed;
-        if (remaining > 0) return `${remaining.toFixed(0)}${unit} por consumir.`;
-        return `${Math.abs(remaining).toFixed(0)}${unit} sobre tu objetivo.`;
-    };
-
-    processedText = processedText.replace(/\[CALORIES_REMAINING_MESSAGE_PLACEHOLDER\]/g, formatRemainingMessage(todayIntake.caloriesConsumed, targets.calories, 'kcal'));
-    processedText = processedText.replace(/\[PROTEIN_REMAINING_MESSAGE_PLACEHOLDER\]/g, formatRemainingMessage(todayIntake.proteinConsumed, targets.protein, 'g'));
-    processedText = processedText.replace(/\[CARBS_REMAINING_MESSAGE_PLACEHOLDER\]/g, formatRemainingMessage(todayIntake.carbsConsumed, targets.carbs, 'g'));
-    processedText = processedText.replace(/\[FATS_REMAINING_MESSAGE_PLACEHOLDER\]/g, formatRemainingMessage(todayIntake.fatsConsumed, targets.fats, 'g'));
     
-    let muscleGainReminder = "";
-    if ((profile.goals === PersonalGoal.GainMuscleImproveComposition || (profile.athleticGoals || []).includes(AthleticGoalOptions.MuscleGainPower)) && targets.protein) {
-        let idealWeightInfo = "";
-        const weightKg = parseFloat(profile.weight);
-        const heightCm = parseInt(profile.height);
-        if (heightCm > 0 && weightKg > 0) {
-            const ibwData = calculateIdealBodyWeightRange(heightCm);
-            if (ibwData) {
-                idealWeightInfo = ` (idealmente, alrededor de ${ibwData.ideal.toFixed(1)} kg)`;
-            }
-        }
-        muscleGainReminder = `Dado que uno de tus objetivos es ganar masa muscular, es clave alcanzar tu meta de proteínas de aproximadamente ${targets.protein.toFixed(0)}g diarios. Esto suele equivaler a 1.6-2.2 gramos de proteína por kilogramo de tu peso corporal${idealWeightInfo}. ¡Asegúrate de que tus comidas contribuyan a este objetivo! `;
-    }
-    processedText = processedText.replace(/\[MUSCLE_GAIN_PROTEIN_REMINDER_PLACEHOLDER\]/g, muscleGainReminder);
-    
-    return processedText;
-};
+  }, [userProfile, currentSession, isGuestSession, handleProfileEditingComplete]);
+  // The line above contained 'dailyIntake' and 'nutrientTargets' which are not used in handleProfileUpdate and cause unnecessary re-renders.
+  // Also 'showDailyCheckInSection' was removed as its state is internal to ProfileEditor and doesn't directly influence App's handleProfileUpdate logic flow for completion.
 
-  const handleSendMessage = useCallback(async (
-    userInput: string | null,
-    inputMethod: 'text' | 'voice' | 'image' = 'text',
-    audioData?: { base64Data: string; mimeType: string },
-    imageData?: { base64Data: string; mimeType: string; dataUri: string }
-  ) => {
-    if (!userInput?.trim() && inputMethod === 'text' && !imageData) return;
-    setLastInputMethod(inputMethod);
+  const handleClearLocalStorage = () => {
+    if (confirm("¿Estás seguro de que quieres borrar tu historial de chat y registro de comidas de este navegador? Tu perfil guardado en la nube no se verá afectado.")) {
+      if (isGuestSession) {
+          localStorage.removeItem(GUEST_CHAT_MESSAGES_STORAGE_KEY);
+          setMessages([{ id: crypto.randomUUID(), sender: 'ai', text: GUEST_INITIAL_WELCOME_MESSAGE_TEXT, timestamp: new Date(), feedback: null }]);
+      } else if (currentSession?.user?.id) {
+          const userId = currentSession.user.id;
+          const chatKey = getUserStorageKey(CHAT_MESSAGES_STORAGE_KEY_PREFIX, userId);
+          const intakeKey = getUserStorageKey(DAILY_INTAKE_STORAGE_KEY_PREFIX, userId);
+          const targetsKey = getUserStorageKey(NUTRIENT_TARGETS_STORAGE_KEY_PREFIX, userId);
+          
+          if(chatKey) localStorage.removeItem(chatKey);
+          if(intakeKey) localStorage.removeItem(intakeKey);
+          if(targetsKey) localStorage.removeItem(targetsKey);
 
-    const displayUserText = imageData ? imageData.dataUri : (userInput || (audioData ? "🎤 Audio enviado..." : ""));
-    const newUserMessage: Message = { id: crypto.randomUUID(), sender: 'user', text: displayUserText, timestamp: new Date() };
-    setMessages(prev => {
-        const updatedMessages = [...prev, newUserMessage];
-        setTimeout(() => document.getElementById(`message-${newUserMessage.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0);
-        return updatedMessages;
-    });
-    setIsLoading(true); setError(null); 
-
-    try {
-      const aiResponse: GeminiServiceResponse = await generateNutriKickResponse(
-        userInput, userProfile, audioData, imageData ? { base64Data: imageData.base64Data, mimeType: imageData.mimeType } : undefined,
-        dailyIntake, nutrientTargets, currentBMR, currentTDEE
-      );
-      
-      let finalAiText = aiResponse.text;
-      let updatedIntake = dailyIntake;
-
-      if (aiResponse.estimatedIntake) {
-        const meal = aiResponse.estimatedIntake;
-        updatedIntake = {
-            ...dailyIntake,
-            caloriesConsumed: dailyIntake.caloriesConsumed + meal.calories,
-            proteinConsumed: dailyIntake.proteinConsumed + meal.protein,
-            carbsConsumed: dailyIntake.carbsConsumed + meal.carbs,
-            fatsConsumed: dailyIntake.fatsConsumed + meal.fats,
-        };
-        setDailyIntake(updatedIntake); 
-        finalAiText = processAiResponseWithPlaceholders(aiResponse.text, meal, updatedIntake, nutrientTargets, userProfile);
-      } else {
-        finalAiText = processAiResponseWithPlaceholders(aiResponse.text, undefined, dailyIntake, nutrientTargets, userProfile);
+          setMessages(isProfileConsideredEmpty(userProfile) ? [{ id: crypto.randomUUID(), sender: 'ai', text: AUTH_WELCOME_MESSAGE_TEXT_NO_PROFILE, timestamp: new Date(), feedback: null }] : []);
+          setDailyIntake({ ...initialDefaultDailyIntake, date: getTodayDateString() });
+          // Nutrient targets are derived from profile, so they will recalculate or be cleared if profile is empty.
+          // Re-trigger calculation if profile exists:
+          if (!isProfileConsideredEmpty(userProfile) && currentTDEE) {
+            setNutrientTargets(calculateMacronutrientTargets(userProfile, currentTDEE));
+          } else {
+            setNutrientTargets({...initialDefaultNutrientTargets});
+          }
+          alert("Datos locales borrados.");
       }
-      
-      const newAiMessage: Message = { id: crypto.randomUUID(), sender: 'ai', text: finalAiText, timestamp: new Date() };
-      setMessages(prev => {
-        const updatedMessages = [...prev, newAiMessage];
-        setTimeout(() => document.getElementById(`message-${newAiMessage.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0);
-        return updatedMessages;
-      });
+    }
+  };
 
-    } catch (err) {
-      console.error("Error fetching AI response:", err);
-      const errorMessageText = err instanceof Error ? err.message : "Ocurrió un error al contactar a Nutri-Kick AI.";
-      setError(errorMessageText);
-      const errorMsg = `Lo siento, tuve problemas: ${errorMessageText}. Inténtalo más tarde. 🛠️`;
-      const newErrorAiMessage: Message = { id: crypto.randomUUID(), sender: 'ai', text: errorMsg, timestamp: new Date() };
-      setMessages(prev => {
-        const updatedMessages = [...prev, newErrorAiMessage];
-        setTimeout(() => document.getElementById(`message-${newErrorAiMessage.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0);
-        return updatedMessages;
-      });
-      setTimeout(() => setError(null), 7000);
-    } finally { setIsLoading(false); }
-  }, [userProfile, dailyIntake, nutrientTargets, currentBMR, currentTDEE, processAiResponseWithPlaceholders]);
+  const handleMessageFeedback = useCallback((messageId: string, feedbackValue: 'up' | 'down') => {
+    setMessages(prevMessages => 
+      prevMessages.map(msg => 
+        msg.id === messageId 
+        ? { ...msg, feedback: msg.feedback === feedbackValue ? null : feedbackValue } 
+        : msg
+      )
+    );
+  }, []);
 
+  const handleSendMessage = useCallback(async (userInput: string, imageInput?: {base64Data: string, mimeType: string}) => {
+    setError(null);
+    setIsLoading(true);
+    setLastInputMethod(imageInput ? 'image' : (userInput.startsWith("(Audio") ? 'voice' : 'text')); // Adjusted for new audio message format
 
-  const handleSendTextMessage = useCallback((text: string) => {
-    handleSendMessage(text, 'text');
-  }, [handleSendMessage]);
-
-  const handleSendAudioMessage = useCallback(async (base64Audio: string, mimeType: string) => {
-    handleSendMessage(null, 'voice', { base64Data: base64Audio, mimeType });
-  }, [handleSendMessage]);
-
-  const handleSendImageMessage = useCallback(async (imageBase64DataUri: string) => {
-    const mimeType = dataURItoMIME(imageBase64DataUri);
-    const base64Data = imageBase64DataUri.split(',')[1];
-    // Updated default prompt for images
-    const promptForImage = chatInputRef.current?.value.trim() || "He enviado una imagen. ¿Puedes ayudarme con ella? Si es comida y tienes suficiente información (o después de que te dé más detalles si los pides), intenta estimar sus nutrientes para mi registro diario.";
-    if (chatInputRef.current) chatInputRef.current.value = ""; 
+    const userMessageText = imageInput ? (userInput || "Imagen adjunta") : userInput;
+    const newUserMessage: Message = { id: crypto.randomUUID(), sender: 'user', text: userMessageText, timestamp: new Date(), feedback: null };
+    if (imageInput) { // If there's an image, the userMessage.text will be its data URI for display
+        newUserMessage.text = `data:${imageInput.mimeType};base64,${imageInput.base64Data}`;
+    }
+    setMessages(prev => [...prev, newUserMessage]);
     
-    handleSendMessage(promptForImage, 'image', undefined, { base64Data, mimeType, dataUri: imageBase64DataUri });
-  }, [handleSendMessage, chatInputRef]);
+    let geminiResponse: GeminiServiceResponse | null = null;
+    try {
+      geminiResponse = await generateNutriKickResponse(
+        userInput, 
+        userProfile, 
+        undefined, // Audio input not handled here, it's transcribed first
+        imageInput, 
+        dailyIntake, 
+        nutrientTargets, 
+        currentBMR, 
+        currentTDEE,
+        isGuestSession
+      );
+
+      if (geminiResponse?.estimatedIntake && !isGuestSession && currentSession?.user?.id) {
+        const intake = geminiResponse.estimatedIntake;
+        setDailyIntake(prev => ({
+          ...prev,
+          caloriesConsumed: prev.caloriesConsumed + intake.calories,
+          proteinConsumed: prev.proteinConsumed + intake.protein,
+          carbsConsumed: prev.carbsConsumed + intake.carbs,
+          fatsConsumed: prev.fatsConsumed + intake.fats,
+        }));
+      }
+
+    } catch (apiError: any) {
+      console.error("Error from Gemini service:", apiError);
+      setError(apiError.message || "Error al comunicarse con la IA. Intenta de nuevo.");
+      geminiResponse = { text: `Lo siento, tuve un problema al procesar tu solicitud: ${apiError.message}` };
+    } finally {
+      setIsLoading(false);
+      if (geminiResponse) {
+        const aiMessageText = geminiResponse.text;
+        
+        let processedText = aiMessageText;
+        if (!isGuestSession && dailyIntake && nutrientTargets) {
+            const currentCalories = dailyIntake.caloriesConsumed + (geminiResponse.estimatedIntake?.calories || 0);
+            const currentProtein = dailyIntake.proteinConsumed + (geminiResponse.estimatedIntake?.protein || 0);
+            const currentCarbs = dailyIntake.carbsConsumed + (geminiResponse.estimatedIntake?.carbs || 0);
+            const currentFats = dailyIntake.fatsConsumed + (geminiResponse.estimatedIntake?.fats || 0);
+
+            processedText = processedText
+                .replace(/\[DAILY_CALORIES_CONSUMED_PLACEHOLDER\]/g, currentCalories.toFixed(0))
+                .replace(/\[TARGET_CALORIES_PLACEHOLDER\]/g, nutrientTargets.calories?.toFixed(0) || 'N/A')
+                .replace(/\[DAILY_PROTEIN_CONSUMED_PLACEHOLDER\]/g, currentProtein.toFixed(0))
+                .replace(/\[TARGET_PROTEIN_PLACEHOLDER\]/g, nutrientTargets.protein?.toFixed(0) || 'N/A')
+                .replace(/\[DAILY_CARBS_CONSUMED_PLACEHOLDER\]/g, currentCarbs.toFixed(0))
+                .replace(/\[TARGET_CARBS_PLACEHOLDER\]/g, nutrientTargets.carbs?.toFixed(0) || 'N/A')
+                .replace(/\[DAILY_FATS_CONSUMED_PLACEHOLDER\]/g, currentFats.toFixed(0))
+                .replace(/\[TARGET_FATS_PLACEHOLDER\]/g, nutrientTargets.fats?.toFixed(0) || 'N/A');
+
+            const caloriesRemaining = (nutrientTargets.calories || 0) - currentCalories;
+            const proteinRemaining = (nutrientTargets.protein || 0) - currentProtein;
+            const carbsRemaining = (nutrientTargets.carbs || 0) - currentCarbs;
+            const fatsRemaining = (nutrientTargets.fats || 0) - currentFats;
+
+            processedText = processedText
+                .replace(/\[CALORIES_REMAINING_MESSAGE_PLACEHOLDER\]/g, caloriesRemaining >= 0 ? `Te quedan ${caloriesRemaining.toFixed(0)} kcal.` : `Has superado tu objetivo calórico por ${Math.abs(caloriesRemaining).toFixed(0)} kcal.`)
+                .replace(/\[PROTEIN_REMAINING_MESSAGE_PLACEHOLDER\]/g, proteinRemaining >= 0 ? `Te quedan ${proteinRemaining.toFixed(0)}g de proteína.` : `Has superado tu objetivo de proteína por ${Math.abs(proteinRemaining).toFixed(0)}g.`)
+                .replace(/\[CARBS_REMAINING_MESSAGE_PLACEHOLDER\]/g, carbsRemaining >= 0 ? `Te quedan ${carbsRemaining.toFixed(0)}g de carbohidratos.` : `Has superado tu objetivo de carbohidratos por ${Math.abs(carbsRemaining).toFixed(0)}g.`)
+                .replace(/\[FATS_REMAINING_MESSAGE_PLACEHOLDER\]/g, fatsRemaining >= 0 ? `Te quedan ${fatsRemaining.toFixed(0)}g de grasa.` : `Has superado tu objetivo de grasa por ${Math.abs(fatsRemaining).toFixed(0)}g.`);
+            
+            let proteinReminder = "";
+            if (userProfile.goals === PersonalGoal.GainMuscleImproveComposition || (userProfile.isAthlete && userProfile.athleticGoals?.includes(AthleticGoalOptions.MuscleGainPower))) {
+                if (nutrientTargets.protein && currentProtein < nutrientTargets.protein * 0.8) {
+                    proteinReminder = "Recuerda que para ganar músculo es importante alcanzar tu objetivo de proteínas. ¡Sigue así!";
+                } else if (nutrientTargets.protein && currentProtein >= nutrientTargets.protein) {
+                    proteinReminder = "¡Excelente consumo de proteína para tus objetivos de ganancia muscular!";
+                }
+            }
+            processedText = processedText.replace(/\[MUSCLE_GAIN_PROTEIN_REMINDER_PLACEHOLDER\]/g, proteinReminder);
+        } else { // For guests, remove all tracking placeholders
+             processedText = processedText
+                .replace(/\[DAILY_CALORIES_CONSUMED_PLACEHOLDER\]/g, 'N/A')
+                .replace(/\[TARGET_CALORIES_PLACEHOLDER\]/g, 'N/A')
+                .replace(/\[DAILY_PROTEIN_CONSUMED_PLACEHOLDER\]/g, 'N/A')
+                .replace(/\[TARGET_PROTEIN_PLACEHOLDER\]/g, 'N/A')
+                .replace(/\[DAILY_CARBS_CONSUMED_PLACEHOLDER\]/g, 'N/A')
+                .replace(/\[TARGET_CARBS_PLACEHOLDER\]/g, 'N/A')
+                .replace(/\[DAILY_FATS_CONSUMED_PLACEHOLDER\]/g, 'N/A')
+                .replace(/\[TARGET_FATS_PLACEHOLDER\]/g, 'N/A')
+                .replace(/\[CALORIES_REMAINING_MESSAGE_PLACEHOLDER\]/g, '')
+                .replace(/\[PROTEIN_REMAINING_MESSAGE_PLACEHOLDER\]/g, '')
+                .replace(/\[CARBS_REMAINING_MESSAGE_PLACEHOLDER\]/g, '')
+                .replace(/\[FATS_REMAINING_MESSAGE_PLACEHOLDER\]/g, '')
+                .replace(/\[MUSCLE_GAIN_PROTEIN_REMINDER_PLACEHOLDER\]/g, '');
+        }
 
 
+        const newAiMessage: Message = { id: crypto.randomUUID(), sender: 'ai', text: processedText, timestamp: new Date(), feedback: null };
+        setMessages(prev => [...prev, newAiMessage]);
+      }
+    }
+
+  }, [userProfile, dailyIntake, nutrientTargets, currentBMR, currentTDEE, isGuestSession, currentSession]);
+
+  
   const handleToggleRecording = useCallback(async () => {
     setMicPermissionError(null);
     if (isRecording) {
-      if (mediaRecorderRef.current?.state === "recording") mediaRecorderRef.current.stop();
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
+        mediaRecorderRef.current.stop();
+      }
       setIsRecording(false);
     } else {
-      if (typeof MediaRecorder === 'undefined') { setMicPermissionError("Tu navegador no soporta grabación de audio. 😥"); return; }
       try {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            setMicPermissionError("Tu navegador no soporta la grabación de audio. Prueba con otro.");
+            setIsRecording(false); return;
+        }
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         const supportedMimeType = getSupportedMimeType();
-        actualMimeTypeRef.current = supportedMimeType || 'audio/webm';
-        const options = supportedMimeType ? { mimeType: supportedMimeType } : {};
-        mediaRecorderRef.current = new MediaRecorder(stream, options);
+        if (!supportedMimeType) {
+            setMicPermissionError("No se encontró un formato de audio soportado para grabar.");
+            setIsRecording(false); return;
+        }
+        actualMimeTypeRef.current = supportedMimeType;
+        
+        mediaRecorderRef.current = new MediaRecorder(stream, { mimeType: supportedMimeType });
         audioChunksRef.current = [];
-        mediaRecorderRef.current.ondataavailable = (event) => { if (event.data.size > 0) audioChunksRef.current.push(event.data); };
+
+        mediaRecorderRef.current.ondataavailable = (event) => {
+          if (event.data.size > 0) audioChunksRef.current.push(event.data);
+        };
+
         mediaRecorderRef.current.onstop = async () => {
-          const finalMimeType = mediaRecorderRef.current?.mimeType || actualMimeTypeRef.current;
-          if (audioChunksRef.current.length === 0) { console.warn("No audio chunks recorded."); stream.getTracks().forEach(t => t.stop()); setIsRecording(false); return; }
-          const audioBlob = new Blob(audioChunksRef.current, { type: finalMimeType });
+          stream.getTracks().forEach(track => track.stop()); // Release microphone
+          if (audioChunksRef.current.length === 0) {
+            console.warn("No audio data recorded.");
+            setIsLoading(false); 
+            return;
+          }
+          
+          setLastInputMethod('voice');
+          const userMessageFromAudio: Message = { 
+              id: crypto.randomUUID(), 
+              sender: 'user', 
+              text: "(Audio enviado 🎤)",
+              timestamp: new Date(),
+              feedback: null
+          };
+          setMessages(prev => [...prev, userMessageFromAudio]);
+          setIsLoading(true);
+
+          const audioBlob = new Blob(audioChunksRef.current, { type: actualMimeTypeRef.current });
           audioChunksRef.current = [];
-          if (audioBlob.size === 0) { console.warn("Audio blob is empty."); stream.getTracks().forEach(t => t.stop()); setIsRecording(false); return; }
+
           try {
             const base64Audio = await blobToBase64(audioBlob);
-            handleSendAudioMessage(base64Audio, finalMimeType);
-          } catch (e) { console.error("Blob to base64 error:", e); setError("Error procesando audio."); setTimeout(() => setError(null), 5000); }
-          stream.getTracks().forEach(track => track.stop()); setIsRecording(false); chatInputRef.current?.focus();
+            
+            const geminiResponseForAudio = await generateNutriKickResponse(
+                null, // Pass null or a generic prompt for audio. GeminiService will use a default if null.
+                userProfile,
+                { base64Data: base64Audio, mimeType: actualMimeTypeRef.current },
+                undefined, 
+                dailyIntake, 
+                nutrientTargets, 
+                currentBMR, 
+                currentTDEE,
+                isGuestSession
+            );
+
+            if (geminiResponseForAudio?.estimatedIntake && !isGuestSession && currentSession?.user?.id) {
+              const intake = geminiResponseForAudio.estimatedIntake;
+              setDailyIntake(prev => ({
+                ...prev,
+                caloriesConsumed: prev.caloriesConsumed + intake.calories,
+                proteinConsumed: prev.proteinConsumed + intake.protein,
+                carbsConsumed: prev.carbsConsumed + intake.carbs,
+                fatsConsumed: prev.fatsConsumed + intake.fats,
+              }));
+            }
+            
+            let processedText = geminiResponseForAudio.text;
+             if (!isGuestSession && dailyIntake && nutrientTargets) {
+                const currentCalories = dailyIntake.caloriesConsumed + (geminiResponseForAudio.estimatedIntake?.calories || 0);
+                const currentProtein = dailyIntake.proteinConsumed + (geminiResponseForAudio.estimatedIntake?.protein || 0);
+                const currentCarbs = dailyIntake.carbsConsumed + (geminiResponseForAudio.estimatedIntake?.carbs || 0);
+                const currentFats = dailyIntake.fatsConsumed + (geminiResponseForAudio.estimatedIntake?.fats || 0);
+
+                processedText = processedText
+                    .replace(/\[DAILY_CALORIES_CONSUMED_PLACEHOLDER\]/g, currentCalories.toFixed(0))
+                    .replace(/\[TARGET_CALORIES_PLACEHOLDER\]/g, nutrientTargets.calories?.toFixed(0) || 'N/A')
+                    .replace(/\[DAILY_PROTEIN_CONSUMED_PLACEHOLDER\]/g, currentProtein.toFixed(0))
+                    .replace(/\[TARGET_PROTEIN_PLACEHOLDER\]/g, nutrientTargets.protein?.toFixed(0) || 'N/A')
+                    .replace(/\[DAILY_CARBS_CONSUMED_PLACEHOLDER\]/g, currentCarbs.toFixed(0))
+                    .replace(/\[TARGET_CARBS_PLACEHOLDER\]/g, nutrientTargets.carbs?.toFixed(0) || 'N/A')
+                    .replace(/\[DAILY_FATS_CONSUMED_PLACEHOLDER\]/g, currentFats.toFixed(0))
+                    .replace(/\[TARGET_FATS_PLACEHOLDER\]/g, nutrientTargets.fats?.toFixed(0) || 'N/A');
+                
+                const caloriesRemaining = (nutrientTargets.calories || 0) - currentCalories;
+                const proteinRemaining = (nutrientTargets.protein || 0) - currentProtein;
+                const carbsRemaining = (nutrientTargets.carbs || 0) - currentCarbs;
+                const fatsRemaining = (nutrientTargets.fats || 0) - currentFats;
+
+
+                processedText = processedText
+                    .replace(/\[CALORIES_REMAINING_MESSAGE_PLACEHOLDER\]/g, caloriesRemaining >= 0 ? `Te quedan ${caloriesRemaining.toFixed(0)} kcal.` : `Has superado tu objetivo calórico por ${Math.abs(caloriesRemaining).toFixed(0)} kcal.`)
+                    .replace(/\[PROTEIN_REMAINING_MESSAGE_PLACEHOLDER\]/g, proteinRemaining >= 0 ? `Te quedan ${proteinRemaining.toFixed(0)}g de proteína.` : `Has superado tu objetivo de proteína por ${Math.abs(proteinRemaining).toFixed(0)}g.`)
+                    .replace(/\[CARBS_REMAINING_MESSAGE_PLACEHOLDER\]/g, carbsRemaining >= 0 ? `Te quedan ${carbsRemaining.toFixed(0)}g de carbohidratos.` : `Has superado tu objetivo de carbohidratos por ${Math.abs(carbsRemaining).toFixed(0)}g.`)
+                    .replace(/\[FATS_REMAINING_MESSAGE_PLACEHOLDER\]/g, fatsRemaining >= 0 ? `Te quedan ${fatsRemaining.toFixed(0)}g de grasa.` : `Has superado tu objetivo de grasa por ${Math.abs(fatsRemaining).toFixed(0)}g.`);
+
+
+                let proteinReminder = "";
+                 if (userProfile.goals === PersonalGoal.GainMuscleImproveComposition || (userProfile.isAthlete && userProfile.athleticGoals?.includes(AthleticGoalOptions.MuscleGainPower))) {
+                     if (nutrientTargets.protein && currentProtein < nutrientTargets.protein * 0.8) proteinReminder = "Recuerda tu objetivo de proteínas. ¡Sigue así!";
+                 }
+                processedText = processedText.replace(/\[MUSCLE_GAIN_PROTEIN_REMINDER_PLACEHOLDER\]/g, proteinReminder);
+            } else { // Guest
+                processedText = processedText
+                    .replace(/\[DAILY_CALORIES_CONSUMED_PLACEHOLDER\]/g, 'N/A')
+                    .replace(/\[TARGET_CALORIES_PLACEHOLDER\]/g, 'N/A')
+                    .replace(/\[DAILY_PROTEIN_CONSUMED_PLACEHOLDER\]/g, 'N/A')
+                    .replace(/\[TARGET_PROTEIN_PLACEHOLDER\]/g, 'N/A')
+                    .replace(/\[DAILY_CARBS_CONSUMED_PLACEHOLDER\]/g, 'N/A')
+                    .replace(/\[TARGET_CARBS_PLACEHOLDER\]/g, 'N/A')
+                    .replace(/\[DAILY_FATS_CONSUMED_PLACEHOLDER\]/g, 'N/A')
+                    .replace(/\[TARGET_FATS_PLACEHOLDER\]/g, 'N/A')
+                    .replace(/\[CALORIES_REMAINING_MESSAGE_PLACEHOLDER\]/g, '')
+                    .replace(/\[PROTEIN_REMAINING_MESSAGE_PLACEHOLDER\]/g, '')
+                    .replace(/\[CARBS_REMAINING_MESSAGE_PLACEHOLDER\]/g, '')
+                    .replace(/\[FATS_REMAINING_MESSAGE_PLACEHOLDER\]/g, '')
+                    .replace(/\[MUSCLE_GAIN_PROTEIN_REMINDER_PLACEHOLDER\]/g, '');
+            }
+
+            const aiResponseMessage: Message = { id: crypto.randomUUID(), sender: 'ai', text: processedText, timestamp: new Date(), feedback: null };
+            setMessages(prev => [...prev, aiResponseMessage]);
+
+          } catch (transcriptionError: any) {
+            console.error("Error processing audio with Gemini:", transcriptionError);
+            setMessages(prev => [...prev, { id: crypto.randomUUID(), sender: 'ai', text: `Error al procesar audio: ${transcriptionError.message}`, timestamp: new Date(), feedback: null }]);
+          } finally {
+            setIsLoading(false);
+          }
         };
-        mediaRecorderRef.current.onerror = (event: Event) => { console.error("MediaRecorder error:", event); setMicPermissionError("Error durante la grabación."); setIsRecording(false); stream.getTracks().forEach(t => t.stop()); chatInputRef.current?.focus(); };
-        mediaRecorderRef.current.start(); setIsRecording(true); if (chatInputRef.current) chatInputRef.current.value = "";
-      } catch (err: any) { 
-        console.error("getUserMedia error:", err);
-        if (err.name === 'NotAllowedError') setMicPermissionError("Permiso de micrófono denegado. Actívalo en los ajustes del navegador.");
-        else if (err.name === 'NotFoundError') setMicPermissionError("No se encontró un micrófono. Conecta uno y reintenta.");
-        else setMicPermissionError("Error al acceder al micrófono.");
-        setIsRecording(false); 
+        mediaRecorderRef.current.start();
+        setIsRecording(true);
+        if (chatInputRef.current) chatInputRef.current.value = ""; // Clear text input
+      } catch (err) {
+        console.error("Error accessing microphone:", err);
+        let message = "No se pudo acceder al micrófono.";
+        if (err instanceof Error) {
+            if (err.name === "NotAllowedError") message = "Permiso para micrófono denegado. Habilítalo en los ajustes de tu navegador.";
+            else if (err.name === "NotFoundError") message = "No se encontró un micrófono disponible.";
+            else if (err.name === "NotReadableError") message = "El micrófono está siendo usado por otra aplicación o hubo un error de hardware.";
+            else message = `Error de micrófono: ${err.message}`;
+        }
+        setMicPermissionError(message);
+        setIsRecording(false);
+        if (mediaRecorderRef.current && mediaRecorderRef.current.stream) {
+            mediaRecorderRef.current.stream.getTracks().forEach(track => track.stop());
+        }
       }
     }
-  }, [isRecording, handleSendAudioMessage]);
+  }, [isRecording, userProfile, dailyIntake, nutrientTargets, currentBMR, currentTDEE, isGuestSession, currentSession]);
 
-  const handleOpenCamera = useCallback(async () => {
+  const openCamera = async () => {
     setCameraError(null);
-    if (typeof navigator.mediaDevices?.getUserMedia !== 'function') { setCameraError("Tu navegador no soporta acceso a la cámara."); return; }
+    if (isGuestSession) {
+        setCameraError("Debes iniciar sesión para usar la cámara.");
+        return;
+    }
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
-      videoStreamRef.current = stream; setIsCameraOpen(true);
-    } catch (err: any) { 
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        setCameraError("Tu navegador no soporta el acceso a la cámara. Prueba con otro.");
+        return;
+      }
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        video: { 
+          facingMode: "environment", // Prioritize back camera
+          width: { ideal: 1280 }, // Request HD but allow flexibility
+          height: { ideal: 720 } 
+        } 
+      });
+      videoStreamRef.current = stream;
+      if (videoElementRef.current) {
+        videoElementRef.current.srcObject = stream;
+        // Wait for video metadata to load to get correct dimensions
+        videoElementRef.current.onloadedmetadata = () => {
+            if (videoElementRef.current && canvasElementRef.current) {
+                // Set canvas dimensions based on video's actual dimensions to avoid distortion
+                canvasElementRef.current.width = videoElementRef.current.videoWidth;
+                canvasElementRef.current.height = videoElementRef.current.videoHeight;
+            }
+        };
+      }
+      setIsCameraOpen(true);
+    } catch (err) {
       console.error("Error accessing camera:", err);
-      if (err.name === 'NotAllowedError') setCameraError("Permiso de cámara denegado. Actívalo en los ajustes.");
-      else if (err.name === 'NotFoundError') setCameraError("No se encontró una cámara.");
-      else setCameraError("Error al acceder a la cámara.");
-      setIsCameraOpen(false);
+      let message = "No se pudo acceder a la cámara.";
+       if (err instanceof Error) {
+            if (err.name === "NotAllowedError") message = "Permiso para cámara denegado. Habilítalo en los ajustes de tu navegador.";
+            else if (err.name === "NotFoundError") message = "No se encontró una cámara disponible.";
+            else if (err.name === "NotReadableError") message = "La cámara está siendo usada por otra aplicación o hubo un error de hardware.";
+            else if (err.name === "OverconstrainedError") message = `No se pudo satisfacer la configuración de cámara solicitada (ej. facingMode). ${err.message}`;
+            else message = `Error de cámara: ${err.message}`;
+        }
+      setCameraError(message);
+      closeCamera();
     }
-  }, []);
+  };
+
+  const closeCamera = () => {
+    if (videoStreamRef.current) {
+      videoStreamRef.current.getTracks().forEach(track => track.stop());
+      videoStreamRef.current = null;
+    }
+    if (videoElementRef.current) {
+        videoElementRef.current.srcObject = null;
+    }
+    setIsCameraOpen(false);
+    setCameraError(null);
+  };
+
+  const captureImage = async () => {
+    if (!videoElementRef.current || !canvasElementRef.current) {
+      setCameraError("Error interno al capturar imagen.");
+      return;
+    }
+    const video = videoElementRef.current;
+    const canvas = canvasElementRef.current;
+    // Ensure canvas dimensions match video display size if it changed
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+
+    const context = canvas.getContext('2d');
+    if (!context) {
+      setCameraError("No se pudo obtener el contexto del canvas para capturar la imagen.");
+      return;
+    }
+    context.drawImage(video, 0, 0, canvas.width, canvas.height);
+    
+    // Default to JPEG for smaller size, with a fallback to PNG
+    let dataUrl = canvas.toDataURL('image/jpeg', 0.85); // 0.85 quality
+    let mimeType = 'image/jpeg';
+
+    if (!dataUrl || dataUrl.length < 1000) { // Basic check if JPEG creation failed or is tiny
+        console.warn("JPEG conversion might have failed or produced a very small image, trying PNG.");
+        dataUrl = canvas.toDataURL('image/png');
+        mimeType = 'image/png';
+    }
+
+    if (!dataUrl) {
+        setCameraError("No se pudo convertir la imagen capturada.");
+        return;
+    }
+
+    closeCamera();
+    const base64Image = dataUrl.split(',')[1];
+    
+    // Add a placeholder message for the user to describe the image, if they want
+    const imagePrompt = "Imagen capturada. Describe qué es o qué información necesitas de esta imagen. Si es una comida, ¡dame detalles para registrarla!";
+    // For now, we will use the text input for description. 
+    // The handleSendMessage will be called with this image and any text input.
+    // We can pre-fill the input if desired, or just let the user type.
+    if(chatInputRef.current) {
+        // chatInputRef.current.value = "Imagen de comida: "; // Optional prefill
+        // chatInputRef.current.focus();
+    }
+    
+    // Send the image and current text input to handleSendMessage
+    // The user can add text before or after taking the picture.
+    const currentTextInInput = chatInputRef.current?.value || "";
+    handleSendMessage(currentTextInInput, { base64Data: base64Image, mimeType: mimeType });
+  };
   
-  useEffect(() => {
-    if (isCameraOpen && videoStreamRef.current && videoElementRef.current) {
-        videoElementRef.current.srcObject = videoStreamRef.current;
-        videoElementRef.current.play().catch(e => { console.error("Video play error:", e); setCameraError("Error al iniciar cámara."); });
-    } else if (!isCameraOpen && videoElementRef.current) { videoElementRef.current.srcObject = null; }
-  }, [isCameraOpen]); 
-
-
-  const handleCloseCamera = useCallback(() => {
-    if (videoStreamRef.current) videoStreamRef.current.getTracks().forEach(track => track.stop());
-    videoStreamRef.current = null; setIsCameraOpen(false);
-  }, []);
-
-  const handleCaptureImage = useCallback(() => {
-    if (videoElementRef.current && canvasElementRef.current && videoElementRef.current.readyState >= videoElementRef.current.HAVE_METADATA && videoElementRef.current.videoWidth > 0) {
-      const video = videoElementRef.current; const canvas = canvasElementRef.current;
-      canvas.width = video.videoWidth; canvas.height = video.videoHeight;
-      const context = canvas.getContext('2d');
-      if (context) {
-        if (window.getComputedStyle(video).transform.includes('matrix(-1')) { context.translate(canvas.width, 0); context.scale(-1, 1); }
-        context.drawImage(video, 0, 0, canvas.width, canvas.height);
-        const dataUri = canvas.toDataURL('image/jpeg', 0.85); 
-        handleSendImageMessage(dataUri);
-      } else { setCameraError("Error procesando imagen."); setTimeout(() => setCameraError(null), 5000); }
-    } else { setCameraError("No se pudo capturar. Video no listo."); setTimeout(() => setCameraError(null), 5000); }
-    handleCloseCamera(); chatInputRef.current?.focus();
-  }, [handleCloseCamera, handleSendImageMessage, chatInputRef]);
-
-
-  useEffect(() => { 
-    return () => {
-      mediaRecorderRef.current?.stream?.getTracks().forEach(track => track.stop());
-      videoStreamRef.current?.getTracks().forEach(track => track.stop());
-    };
-  }, []); 
-
-  useEffect(() => { 
-    if (isInitialLoad.current && messages.length === 0) {
-      const welcomeMsg: Message = { id: crypto.randomUUID(), sender: 'ai', text: INITIAL_WELCOME_MESSAGE_TEXT, timestamp: new Date() };
-      setMessages([welcomeMsg]);
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[]); 
-
-  useEffect(() => {
-    if (isInitialLoad.current) {
-        isInitialLoad.current = false; 
-        return; 
-    }
+  const handleAuthAction = async (action: 'signUp' | 'signIn', email: string, pass: string) => {
+    setAuthError(null);
+    setAuthLoading(true); // Use global auth loading
     try {
-      localStorage.setItem(USER_PROFILE_STORAGE_KEY, JSON.stringify(userProfile));
-      if (messages.length > 0) localStorage.setItem(CHAT_MESSAGES_STORAGE_KEY, JSON.stringify(messages));
-      else localStorage.removeItem(CHAT_MESSAGES_STORAGE_KEY);
-      localStorage.setItem(DAILY_INTAKE_STORAGE_KEY, JSON.stringify(dailyIntake));
-      localStorage.setItem(NUTRIENT_TARGETS_STORAGE_KEY, JSON.stringify(nutrientTargets));
-    } catch (error) { console.error("Error saving to localStorage:", error); }
-  }, [userProfile, messages, dailyIntake, nutrientTargets]);
+      if (action === 'signUp') {
+        const { error: signUpError, user } = await signUpUser(email, pass);
+        if (signUpError) throw signUpError;
+        // User will be set by onAuthStateChange, which also closes modal.
+        // For Supabase, usually need email confirmation.
+        alert("¡Cuenta creada! Revisa tu correo electrónico para confirmar tu cuenta si es necesario, y luego inicia sesión.");
 
-  const handleClearCache = useCallback(() => {
-    if (window.confirm("¿Estás seguro de que quieres borrar todos tus datos locales (perfil, chat, registro de comidas) y empezar de nuevo? Esta acción no se puede deshacer.")) {
-      localStorage.removeItem(USER_PROFILE_STORAGE_KEY);
-      localStorage.removeItem(CHAT_MESSAGES_STORAGE_KEY);
-      localStorage.removeItem(DAILY_INTAKE_STORAGE_KEY);
-      localStorage.removeItem(NUTRIENT_TARGETS_STORAGE_KEY);
-      localStorage.removeItem(SUPABASE_USER_PROFILE_ROW_ID_KEY);
-
-      setUserProfile({ ...initialDefaultUserProfile });
-      setMessages([]); // This will trigger the welcome message useEffect
-      setDailyIntake({ ...initialDefaultDailyIntake });
-      setNutrientTargets({ ...initialDefaultNutrientTargets });
-      setCurrentBMR(null);
-      setCurrentTDEE(null);
-      
-      setActiveTab('chat'); // Switch to chat tab to show welcome message
-      setError(null);
-      setSuccessMessage("Datos locales borrados. ¡Empecemos de nuevo!");
-      setTimeout(() => setSuccessMessage(null), 3000);
+      } else { // signIn
+        const { error: signInError, session: signedInSession } = await signInUser(email, pass);
+        if (signInError) throw signInError;
+        // Session will be set by onAuthStateChange, which also closes modal.
+      }
+    } catch (err: any) {
+      console.error(`${action} error:`, err);
+      let friendlyMessage = err.message || `Error durante ${action === 'signUp' ? 'el registro' : 'el inicio de sesión'}.`;
+      // Customize messages based on Supabase error codes if needed
+      if (err.message?.includes("User already registered")) friendlyMessage = "Este correo electrónico ya está registrado. Intenta iniciar sesión.";
+      if (err.message?.includes("Invalid login credentials")) friendlyMessage = "Credenciales inválidas. Verifica tu correo y contraseña.";
+      if (err.message?.includes("Email rate limit exceeded")) friendlyMessage = "Se han enviado demasiados correos. Intenta más tarde.";
+      setAuthError(friendlyMessage);
+    } finally {
+      setAuthLoading(false);
     }
-  }, []);
+  };
+
+  const handleSignOut = async () => {
+    if (confirm("¿Estás seguro de que quieres cerrar sesión?")) {
+        setAuthLoading(true);
+        const { error: signOutError } = await signOutUser();
+        if (signOutError) {
+            setAuthError(`Error al cerrar sesión: ${signOutError.message}`);
+            console.error("Sign out error:", signOutError);
+        }
+        // Auth state change will handle UI updates (clear profile, messages etc.)
+        setAuthLoading(false);
+        setActiveTab('chat'); // Go to chat after logout
+    }
+  };
+
+   if (authLoading && !currentSession && !isGuestSession) { // Show full page loader only during initial auth check
+    return (
+      <div className="flex flex-col items-center justify-center min-h-screen bg-slate-900 text-slate-200 p-4">
+        <LogoIcon className="text-6xl mb-4 text-orange-500" />
+        <h1 className="text-3xl font-bold mb-2 text-slate-100">Nutri-Kick AI</h1>
+        <LoadingSpinner size="lg" color="text-orange-500" />
+        <p className="mt-4 text-slate-400">Conectando y preparando todo...</p>
+      </div>
+    );
+  }
+
+   if (dbStatus === 'error') {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-screen bg-slate-900 text-red-300 p-4">
+        <LogoIcon className="text-6xl mb-4 text-red-500" />
+        <h1 className="text-3xl font-bold mb-2 text-red-200">Error de Conexión</h1>
+        <p className="text-center mb-2">No se pudo conectar con la base de datos.</p>
+        <p className="text-sm text-center bg-red-900/50 p-3 rounded-md">{dbErrorDetails || "Revisa la configuración de Supabase y tu conexión a internet."}</p>
+        <p className="text-xs text-slate-500 mt-4">La aplicación no funcionará correctamente sin la base de datos.</p>
+      </div>
+    );
+  }
 
 
   return (
-    <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-4 selection:bg-orange-500 selection:text-white text-slate-100">
-      <div className="bg-slate-800 backdrop-blur-lg shadow-xl rounded-xl w-full max-w-2xl flex flex-col overflow-hidden" style={{height: 'calc(100vh - 40px)', maxHeight: '700px'}}>
-        <header className="bg-slate-900 text-white p-4 flex items-center justify-between shadow-lg">
-          <div className="flex items-center space-x-3"> <LogoIcon className="text-4xl" /> <h1 className="text-2xl font-bold tracking-tight">Nutri-Kick AI</h1> </div>
-          <div className="flex space-x-1 sm:space-x-2">
-            <button onClick={() => { setActiveTab('chat'); setError(null); setSuccessMessage(null);}} className={`p-2 rounded-md transition-colors flex items-center space-x-1 sm:space-x-2 ${activeTab === 'chat' ? 'bg-orange-600 text-white shadow-md' : 'text-slate-300 hover:bg-slate-700 hover:text-white'}`} aria-label="Chat" title="Chat"> <ChatIcon className="w-5 h-5 sm:w-6 sm:h-6" /> <span className="text-sm sm:text-base">Chat</span> </button>
-            <button onClick={() => {setActiveTab('profile'); setError(null); setSuccessMessage(null);}} className={`p-2 rounded-md transition-colors flex items-center space-x-1 sm:space-x-2 ${activeTab === 'profile' ? 'bg-orange-600 text-white shadow-md' : 'text-slate-300 hover:bg-slate-700 hover:text-white'}`} aria-label="Perfil" title="Perfil"> <ProfileIcon className="w-5 h-5 sm:w-6 sm:h-6" /> <span className="text-sm sm:text-base">Perfil</span> </button>
-          </div>
-        </header>
+    <div className="flex flex-col h-screen bg-slate-900 text-slate-200">
+      {/* Header */}
+      <header className="bg-slate-800 shadow-md p-3 flex justify-between items-center">
+        <div className="flex items-center space-x-2">
+          <LogoIcon className="text-3xl text-orange-500" />
+          <h1 className="text-xl font-semibold text-slate-100 hidden sm:block">Nutri-Kick AI</h1>
+        </div>
+        <div className="flex items-center space-x-2">
+          {currentSession && !isGuestSession && (
+            <span className="text-xs text-slate-400 hidden md:inline">
+              Hola, {userProfile.name || currentSession.user.email || 'Usuario'}
+            </span>
+          )}
+          {isAdmin && ( // Show Admin button if user is admin
+            <button
+              onClick={() => setActiveTab('admin')}
+              className={`p-2 rounded-full transition-colors ${activeTab === 'admin' ? 'bg-purple-600 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-700 hover:text-purple-400'}`}
+              aria-label="Panel de Administración" title="Panel de Administración"
+            >
+              <AdminIcon className="w-6 h-6" />
+            </button>
+          )}
+          <button
+            onClick={() => setActiveTab('chat')}
+            className={`p-2 rounded-full transition-colors ${activeTab === 'chat' ? 'bg-orange-600 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-700 hover:text-orange-400'}`}
+            aria-label="Chat" title="Chat"
+          >
+            <ChatIcon className="w-6 h-6" />
+          </button>
+          {!isGuestSession && currentSession && (
+            <button
+                onClick={() => setActiveTab('profile')}
+                className={`p-2 rounded-full transition-colors ${activeTab === 'profile' ? 'bg-sky-600 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-700 hover:text-sky-400'}`}
+                aria-label="Tu Perfil" title="Tu Perfil"
+            >
+                <ProfileIcon className="w-6 h-6" />
+            </button>
+          )}
+          {currentSession && !isGuestSession ? (
+            <button 
+                onClick={handleSignOut} 
+                className="p-2 rounded-full text-slate-400 hover:bg-slate-700 hover:text-red-400 transition-colors"
+                aria-label="Cerrar sesión" title="Cerrar sesión"
+            >
+              <LogoutIcon className="w-6 h-6" />
+            </button>
+          ) : (
+            <button 
+                onClick={() => setShowAuthModal(true)} 
+                className="p-2 rounded-full text-slate-400 hover:bg-slate-700 hover:text-green-400 transition-colors"
+                aria-label="Iniciar Sesión / Registrarse" title="Iniciar Sesión / Registrarse"
+            >
+              <LoginIcon className="w-6 h-6" />
+            </button>
+          )}
+        </div>
+      </header>
 
-        {dbStatus === 'error' && dbErrorDetails && (
-            <div className="bg-red-700/90 text-white p-3 text-sm m-2 mx-0 sm:mx-2 rounded-md shadow-lg animate-fadeIn border-l-4 border-red-400" role="alert">
-                <p className="font-bold text-base">⚠️ ¡Problema con la Base de Datos (Supabase)!</p>
-                <div className="mt-1 whitespace-pre-line text-xs">{dbErrorDetails}</div>
-                 <p className="mt-2 text-xs">Consulta la consola del desarrollador (F12) para más detalles.</p>
-            </div>
-        )}
-      
-        <main className="flex-grow overflow-y-auto custom-scrollbar p-1 sm:p-2 md:p-4 bg-slate-700 relative">
-          {activeTab === 'chat' && (
+      {/* Main Content Area */}
+      <main className="flex flex-col flex-grow overflow-y-auto custom-scrollbar">
+         {activeTab === 'chat' && (
             <ChatWindow
                 messages={messages}
-                onSendMessage={handleSendTextMessage}
-                isLoading={isLoading}
+                onSendMessage={handleSendMessage}
+                isLoading={isLoading && lastInputMethod !== 'voice'} // Show general loading only if not voice input
                 chatContainerRef={chatContainerRef}
                 isListening={isRecording}
                 onToggleListening={handleToggleRecording}
                 micPermissionError={micPermissionError}
                 chatInputRef={chatInputRef}
-                onOpenCamera={handleOpenCamera}
-              />
-          )}
-          {activeTab === 'profile' && ( 
-            <ProfileEditor 
-              initialProfile={userProfile} 
-              onUpdateProfile={handleProfileUpdate}
-              onEditingComplete={handleProfileEditingComplete}
-              isActive={activeTab === 'profile'} 
-              onClearCache={handleClearCache} // Pass the new handler
-            /> 
-          )}
-        </main>
-
-        {isCameraOpen && (
-          <div className="camera-overlay animate-fadeIn">
-            <div className="camera-modal">
-              {cameraError && <p className="camera-error-message">{cameraError}</p>}
-              <video ref={videoElementRef} autoPlay playsInline muted className="border border-slate-600"></video>
-              <canvas ref={canvasElementRef} style={{ display: 'none' }}></canvas>
-              <div className="camera-buttons">
-                <button onClick={handleCaptureImage} className="camera-capture-button">Tomar Foto 📸</button>
-                <button onClick={handleCloseCamera} className="camera-cancel-button">Cancelar</button>
-              </div>
-            </div>
-          </div>
+                onOpenCamera={openCamera}
+                isGuest={isGuestSession}
+                onFeedback={handleMessageFeedback} // Pass feedback handler
+            />
         )}
+        {activeTab === 'profile' && !isGuestSession && (
+            <ProfileEditor 
+                initialProfile={userProfile} 
+                onUpdateProfile={handleProfileUpdate}
+                onEditingComplete={handleProfileEditingComplete}
+                isActive={activeTab === 'profile'}
+                onClearCache={handleClearLocalStorage}
+                isGuest={isGuestSession} 
+            />
+        )}
+        {activeTab === 'admin' && isAdmin && ( // Show AdminPanel if tab is 'admin' and user is admin
+            <AdminPanel />
+        )}
+      </main>
 
-        {successMessage && ( <div className="bg-green-700/80 border-l-4 border-green-500 text-green-100 p-3 text-sm m-2 rounded-md shadow animate-fadeIn" role="status"> <p className="font-bold">Éxito ✅</p> <p>{successMessage}</p> </div> )}
-        {error && ( <div className="bg-red-800/60 border-l-4 border-red-500 text-red-200 p-3 text-sm m-2 rounded-md shadow animate-fadeIn" role="alert"> <p className="font-bold">Error ⚠️</p> <p>{error}</p> </div> )}
+      {/* Footer / Disclaimer */}
+      {activeTab === 'chat' && (
+         <footer className="bg-slate-800 text-center p-2 border-t border-slate-600">
+             <p className="text-xs text-slate-500">{DISCLAIMER_TEXT}</p>
+         </footer>
+      )}
+      {successMessage && (
+        <div className="fixed bottom-4 right-4 bg-green-600 text-white py-2 px-4 rounded-lg shadow-md animate-fadeIn z-50">
+          {successMessage}
+        </div>
+      )}
+      {error && activeTab !== 'chat' && ( // Show general errors for profile tab if not shown in chat
+        <div className="fixed bottom-4 right-4 bg-red-600 text-white py-2 px-4 rounded-lg shadow-md animate-fadeIn z-50">
+          {error}
+        </div>
+      )}
 
-        <footer className="bg-slate-900 p-3 text-center text-xs text-slate-400 border-t border-slate-700"> <p>{DISCLAIMER_TEXT}</p> </footer>
-      </div>
+      {/* Auth Modal */}
+      {showAuthModal && (
+        <div 
+            className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4 z-40 animate-fadeIn"
+            onClick={(e) => { if (e.target === e.currentTarget) setShowAuthModal(false);}} // Close on overlay click
+        >
+            <div className="relative w-full max-w-md">
+                <AuthForm
+                    onAuthSuccess={() => {
+                        // onAuthStateChange handles closing modal and setting session
+                    }}
+                    isLoading={authLoading}
+                    setIsLoading={setAuthLoading}
+                    setAuthError={setAuthError}
+                    supabaseSignUp={signUpUser}
+                    supabaseSignIn={signInUser}
+                    authError={authError}
+                />
+                 <button 
+                    onClick={() => setShowAuthModal(false)} 
+                    className="absolute top-2 right-2 p-2 text-slate-400 hover:text-slate-200 bg-slate-700 hover:bg-slate-600 rounded-full transition-colors"
+                    aria-label="Cerrar modal de autenticación"
+                 >
+                    <CloseIcon className="w-5 h-5"/>
+                </button>
+            </div>
+        </div>
+      )}
+
+      {/* Camera Modal */}
+      {isCameraOpen && (
+        <div className="camera-overlay" onClick={(e) => { if (e.target === e.currentTarget) closeCamera();}}>
+          <div className="camera-modal">
+            <video ref={videoElementRef} autoPlay playsInline muted className="shadow-lg"></video>
+            {cameraError && <p className="camera-error-message">{cameraError}</p>}
+            <div className="camera-buttons">
+              <button onClick={captureImage} className="camera-capture-button" disabled={!!cameraError}>Capturar Foto 📸</button>
+              <button onClick={closeCamera} className="camera-cancel-button">Cancelar</button>
+            </div>
+            <canvas ref={canvasElementRef} style={{ display: 'none' }}></canvas>
+             <p className="text-xs text-slate-400 mt-3 text-center">Apunta a tu comida o etiqueta nutricional.</p>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

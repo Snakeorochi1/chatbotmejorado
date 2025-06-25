@@ -1,7 +1,6 @@
 
-
 import { GoogleGenAI, GenerateContentResponse, Part } from "@google/genai";
-import { UserProfile, Gender, PersonalGoal, DailyIntake, NutrientTargets, EstimatedFoodIntake, SportsDiscipline, AthleticGoalOptions, DietaryApproachOptions, DietaryRestrictionOptions } from '../types';
+import { UserProfile, Gender, PersonalGoal, DailyIntake, NutrientTargets, EstimatedFoodIntake, SportsDiscipline, AthleticGoalOptions, DietaryApproachOptions, DietaryRestrictionOptions, SleepQualityOptions } from '../types';
 import { GEMINI_MODEL_NAME, NUTRI_KICK_AI_PERSONA_PROMPT_TEMPLATE } from '../constants';
 
 // AI Studio is expected to provide process.env.API_KEY.
@@ -53,75 +52,83 @@ export const generateNutriKickResponse = async (
   dailyIntake?: DailyIntake, 
   nutrientTargets?: NutrientTargets, 
   bmr?: number | null, 
-  tdee?: number | null  
+  tdee?: number | null,
+  isGuest?: boolean
 ): Promise<GeminiServiceResponse> => {
 
   let userDataContext = "El usuario no ha proporcionado todos los datos de perfil específicos o acaba de empezar.\n";
-  const relevantProfileData: Partial<UserProfile> = { ...userProfile };
-  const profileKeys = Object.keys(relevantProfileData) as Array<keyof UserProfile>;
-  const hasSomeProfileData = profileKeys.some(key => {
-    const value = relevantProfileData[key];
-    if (typeof value === 'boolean') return true; 
-    if (Array.isArray(value)) return value.length > 0; 
-    return value && value.toString().trim() !== '';
-  });
+  
+  if (isGuest) {
+    userDataContext = "User is a guest. No profile data available.\n";
+  } else {
+    const relevantProfileData: Partial<UserProfile> = { ...userProfile };
+    const profileKeys = Object.keys(relevantProfileData) as Array<keyof UserProfile>;
+    const hasSomeProfileData = profileKeys.some(key => {
+      const value = relevantProfileData[key];
+      if (typeof value === 'boolean') return true; 
+      if (Array.isArray(value)) return value.length > 0; 
+      return value && value.toString().trim() !== '';
+    });
 
-  if (hasSomeProfileData) {
-    userDataContext = "Datos del Usuario (utiliza esta información para personalizar tu respuesta si es relevante):\n";
-    if (userProfile.name) userDataContext += `* Nombre: ${userProfile.name}\n`;
-    if (userProfile.age) userDataContext += `* Edad: ${userProfile.age} años\n`;
-    if (userProfile.weight) userDataContext += `* Peso: ${userProfile.weight} kg\n`;
-    if (userProfile.height) userDataContext += `* Altura: ${userProfile.height} cm\n`;
-    if (userProfile.gender && (userProfile.gender === Gender.Male || userProfile.gender === Gender.Female)) {
-         userDataContext += `* Género: ${userProfile.gender}\n`;
-    }
-    userDataContext += `* ¿Es atleta?: ${userProfile.isAthlete ? 'Sí' : 'No'}\n`;
-    
-    if (userProfile.isAthlete) {
-      if (userProfile.sportsDiscipline) {
-        userDataContext += `* Disciplina Deportiva: ${userProfile.sportsDiscipline}\n`;
+    if (hasSomeProfileData) {
+      userDataContext = "Datos del Usuario (utiliza esta información para personalizar tu respuesta si es relevante):\n";
+      if (userProfile.name) userDataContext += `* Nombre: ${userProfile.name}\n`;
+      if (userProfile.age) userDataContext += `* Edad: ${userProfile.age} años\n`;
+      if (userProfile.weight) userDataContext += `* Peso: ${userProfile.weight} kg\n`;
+      if (userProfile.height) userDataContext += `* Altura: ${userProfile.height} cm\n`;
+      if (userProfile.gender && (userProfile.gender === Gender.Male || userProfile.gender === Gender.Female)) {
+           userDataContext += `* Género: ${userProfile.gender}\n`;
       }
-      if (userProfile.position) userDataContext += `* Posición/Rol: ${userProfile.position}\n`;
-      if (userProfile.trainingLoad) userDataContext += `* Carga de Entrenamiento: ${userProfile.trainingLoad}\n`;
-      if (userProfile.athleticGoals && userProfile.athleticGoals.length > 0) {
-        userDataContext += `* Objetivos Atléticos Específicos: ${userProfile.athleticGoals.join(', ')}\n`;
+      userDataContext += `* ¿Es atleta?: ${userProfile.isAthlete ? 'Sí' : 'No'}\n`;
+      
+      if (userProfile.isAthlete) {
+        if (userProfile.sportsDiscipline) {
+          userDataContext += `* Disciplina Deportiva: ${userProfile.sportsDiscipline}\n`;
+        }
+        if (userProfile.position) userDataContext += `* Posición/Rol: ${userProfile.position}\n`;
+        if (userProfile.trainingLoad) userDataContext += `* Carga de Entrenamiento: ${userProfile.trainingLoad}\n`;
+        if (userProfile.athleticGoals && userProfile.athleticGoals.length > 0) {
+          userDataContext += `* Objetivos Atléticos Específicos: ${userProfile.athleticGoals.join(', ')}\n`;
+        }
+      } else {
+        if (userProfile.trainingFrequency) userDataContext += `* Frecuencia de entrenamiento general: ${userProfile.trainingFrequency}\n`;
       }
-    } else {
-      if (userProfile.trainingFrequency) userDataContext += `* Frecuencia de entrenamiento general: ${userProfile.trainingFrequency}\n`;
-    }
-    if (userProfile.goals) userDataContext += `* Objetivo Principal (General): ${userProfile.goals}\n`;
+      if (userProfile.goals) userDataContext += `* Objetivo Principal (General): ${userProfile.goals}\n`;
 
-    // Updated dietary context
-    if (userProfile.dietaryApproaches && userProfile.dietaryApproaches.length > 0) {
-      userDataContext += `* Preferencias Alimentarias/Enfoques Dietéticos: ${userProfile.dietaryApproaches.join(', ')}\n`;
-    }
-    if (userProfile.dietaryRestrictions && userProfile.dietaryRestrictions.length > 0) {
-      userDataContext += `* Restricciones Alimentarias/Alergias: ${userProfile.dietaryRestrictions.join(', ')}\n`;
-    }
-
-    if (userProfile.currentSupplementUsage) {
-      userDataContext += `* Consume Suplementos: ${userProfile.currentSupplementUsage}\n`;
-    }
-    if (userProfile.supplementInterestOrUsageDetails) {
-      userDataContext += `* Detalles de Suplementos: ${userProfile.supplementInterestOrUsageDetails}\n`;
-    }
-    if (userProfile.wellnessFocusAreas && userProfile.wellnessFocusAreas.length > 0) {
-      userDataContext += `* Áreas de Enfoque en Bienestar: ${userProfile.wellnessFocusAreas.join(', ')}\n`;
-    }
-    if (userProfile.moodToday) userDataContext += `* Ánimo Hoy: ${userProfile.moodToday}\n`;
-    if (userProfile.trainedToday) userDataContext += `* Entrenamiento Hoy: ${userProfile.trainedToday}\n`;
-    if (userProfile.hadBreakfast) userDataContext += `* Desayuno Hoy: ${userProfile.hadBreakfast}\n`;
-    if (userProfile.energyLevel) userDataContext += `* Nivel de Energía Hoy: ${userProfile.energyLevel}\n`;
-    if (userProfile.lastCheckInTimestamp) {
-        const date = new Date(userProfile.lastCheckInTimestamp);
-        userDataContext += `* Último Check-in (Perfil): ${date.toLocaleDateString()} ${date.toLocaleTimeString()}\n (Timestamp: ${userProfile.lastCheckInTimestamp})\n`;
-    } else {
-        userDataContext += `* Último Check-in (Perfil): No registrado\n`;
+      if (userProfile.dietaryApproaches && userProfile.dietaryApproaches.length > 0) {
+        userDataContext += `* Preferencias Alimentarias/Enfoques Dietéticos: ${userProfile.dietaryApproaches.join(', ')}\n`;
+      }
+      if (userProfile.dietaryRestrictions && userProfile.dietaryRestrictions.length > 0) {
+        userDataContext += `* Restricciones Alimentarias/Alergias: ${userProfile.dietaryRestrictions.join(', ')}\n`;
+      }
+      if (userProfile.currentSupplementUsage) {
+        userDataContext += `* Consume Suplementos: ${userProfile.currentSupplementUsage}\n`;
+      }
+      if (userProfile.supplementInterestOrUsageDetails) {
+        userDataContext += `* Detalles de Suplementos: ${userProfile.supplementInterestOrUsageDetails}\n`;
+      }
+      if (userProfile.wellnessFocusAreas && userProfile.wellnessFocusAreas.length > 0) {
+        userDataContext += `* Áreas de Enfoque en Bienestar: ${userProfile.wellnessFocusAreas.join(', ')}\n`;
+      }
+      // Daily Check-in Data
+      if (userProfile.moodToday) userDataContext += `* Ánimo Hoy: ${userProfile.moodToday}\n`;
+      if (userProfile.trainedToday) userDataContext += `* Entrenamiento Hoy: ${userProfile.trainedToday}\n`;
+      if (userProfile.hadBreakfast) userDataContext += `* Desayuno Hoy: ${userProfile.hadBreakfast}\n`;
+      if (userProfile.energyLevel) userDataContext += `* Nivel de Energía Hoy: ${userProfile.energyLevel}\n`;
+      if (userProfile.sleepHours) userDataContext += `* Horas de Sueño: ${userProfile.sleepHours}\n`;
+      if (userProfile.sleepQuality) userDataContext += `* Calidad del Sueño: ${userProfile.sleepQuality}\n`;
+      if (userProfile.lastCheckInTimestamp) {
+          const date = new Date(userProfile.lastCheckInTimestamp);
+          userDataContext += `* Último Check-in (Perfil): ${date.toLocaleDateString()} ${date.toLocaleTimeString()}\n (Timestamp: ${userProfile.lastCheckInTimestamp})\n`;
+      } else {
+          userDataContext += `* Último Check-in (Perfil): No registrado\n`;
+      }
     }
   }
 
+
   let finalSystemInstruction = NUTRI_KICK_AI_PERSONA_PROMPT_TEMPLATE;
-  if (userProfile.age && parseInt(userProfile.age) < 18) {
+  if (!isGuest && userProfile.age && parseInt(userProfile.age) < 18) {
     finalSystemInstruction = `
 ¡ATENCIÓN ESPECIAL! El usuario es MENOR DE 18 AÑOS (${userProfile.age} años).
 Tus interacciones deben ser EXTREMADAMENTE CAUTELOSAS y BREVES.
@@ -134,16 +141,24 @@ Si el usuario insiste en pedir consejos específicos, reitera esta recomendació
   
   let imageAnalysisInstruction = "";
   if (imageInput) {
-    imageAnalysisInstruction = `
-El usuario ha proporcionado una imagen. Por favor, analízala.
+    if (isGuest) {
+      imageAnalysisInstruction = `
+El usuario es un INVITADO y ha proporcionado una imagen. NO intentes estimar nutrientes de la imagen. 
+En lugar de eso, informa al usuario que el análisis de imágenes de comida es una función para usuarios registrados y anímale a crear una cuenta gratuita para acceder a ella. 
+Puedes describir brevemente lo que ves en la imagen si lo deseas, pero el enfoque principal debe ser guiarlo hacia el registro para la funcionalidad completa.
+`;
+    } else {
+      imageAnalysisInstruction = `
+El usuario (registrado) ha proporcionado una imagen. Por favor, analízala.
 - Si parece un plato de comida, puedes intentar estimar sus componentes para el registro de alimentos como se describe en la sección "Food Logging".
 - Si parece una etiqueta de producto, intenta extraer la información nutricional visible.
 - Si no estás seguro de qué es la imagen, descríbela y pregunta al usuario para qué la envió.
 `;
+    }
   }
   
   let athleteContextForPrompt = "";
-  if (userProfile.isAthlete) {
+  if (!isGuest && userProfile.isAthlete) {
     athleteContextForPrompt = `y que practicas ${userProfile.sportsDiscipline || 'un deporte no especificado'} `;
     if (userProfile.position) {
       athleteContextForPrompt += `como ${userProfile.position} `;
@@ -154,35 +169,35 @@ El usuario ha proporcionado una imagen. Por favor, analízala.
     athleteContextForPrompt = athleteContextForPrompt.trim();
   }
 
-
   const systemInstructionText = finalSystemInstruction
-    .replace(/\[USER_NAME_PLACEHOLDER\]/g, userProfile.name || "usuario")
+    .replace(/\[USER_NAME_PLACEHOLDER\]/g, isGuest ? "invitado/a" : (userProfile.name || "usuario"))
     .replace('[USER_DATA_CONTEXT]', userDataContext)
-    .replace('[USER_GOAL_PLACEHOLDER]', userProfile.goals || 'no especificado')
-    .replace('[USER_BMR_PLACEHOLDER]', bmr ? bmr.toFixed(0) : 'N/A')
-    .replace('[USER_TDEE_PLACEHOLDER]', tdee ? tdee.toFixed(0) : 'N/A')
-    .replace('[TARGET_CALORIES_PLACEHOLDER]', nutrientTargets?.calories?.toFixed(0) || 'N/A')
-    .replace('[TARGET_PROTEIN_PLACEHOLDER]', nutrientTargets?.protein?.toFixed(0) || 'N/A')
-    .replace('[TARGET_CARBS_PLACEHOLDER]', nutrientTargets?.carbs?.toFixed(0) || 'N/A')
-    .replace('[TARGET_FATS_PLACEHOLDER]', nutrientTargets?.fats?.toFixed(0) || 'N/A')
-    .replace('[CONSUMED_CALORIES_PLACEHOLDER]', dailyIntake?.caloriesConsumed?.toFixed(0) || '0')
-    .replace('[CONSUMED_PROTEIN_PLACEHOLDER]', dailyIntake?.proteinConsumed?.toFixed(0) || '0')
-    .replace('[CONSUMED_CARBS_PLACEHOLDER]', dailyIntake?.carbsConsumed?.toFixed(0) || '0')
-    .replace('[CONSUMED_FATS_PLACEHOLDER]', dailyIntake?.fatsConsumed?.toFixed(0) || '0')
-    // Updated dietary placeholders
-    .replace(/\[USER_DIETARY_APPROACHES_PLACEHOLDER\]/g, (userProfile.dietaryApproaches || []).join(', ') || 'ninguno especificado')
-    .replace(/\[USER_DIETARY_RESTRICTIONS_PLACEHOLDER\]/g, (userProfile.dietaryRestrictions || []).join(', ') || 'ninguna especificada')
-    .replace(/\[USER_SUPPLEMENT_USAGE_PLACEHOLDER\]/g, userProfile.currentSupplementUsage || 'no especificado')
-    .replace(/\[USER_SUPPLEMENT_DETAILS_PLACEHOLDER\]/g, userProfile.supplementInterestOrUsageDetails || 'ninguno')
-    .replace(/\[USER_WELLNESS_FOCUS_PLACEHOLDER\]/g, (userProfile.wellnessFocusAreas || []).join(', ') || 'ninguna especificada')
-    .replace(/\[USER_MOOD_TODAY_PLACEHOLDER\]/g, userProfile.moodToday || 'no especificado')
-    .replace(/\[USER_TRAINED_TODAY_PLACEHOLDER\]/g, userProfile.trainedToday || 'no especificado')
-    .replace(/\[USER_HAD_BREAKFAST_PLACEHOLDER\]/g, userProfile.hadBreakfast || 'no especificado')
-    .replace(/\[USER_ENERGY_LEVEL_PLACEHOLDER\]/g, userProfile.energyLevel || 'no especificado')
-    .replace(/\[USER_LAST_CHECK_IN_TIMESTAMP_PLACEHOLDER\]/g, userProfile.lastCheckInTimestamp?.toString() || 'nunca')
-    .replace(/\[USER_SPORTS_DISCIPLINE_PLACEHOLDER\]/g, userProfile.sportsDiscipline || 'No especificada')
-    .replace(/\[USER_POSITION_PLACEHOLDER\]/g, userProfile.position || 'No especificada')
-    .replace(/\[USER_ATHLETIC_GOALS_PLACEHOLDER\]/g, (userProfile.athleticGoals || []).join(', ') || 'No especificados')
+    .replace('[USER_GOAL_PLACEHOLDER]', isGuest ? 'general' : (userProfile.goals || 'no especificado'))
+    .replace('[USER_BMR_PLACEHOLDER]', isGuest ? 'N/A (disponible para usuarios registrados)' : (bmr ? bmr.toFixed(0) : 'N/A'))
+    .replace('[USER_TDEE_PLACEHOLDER]', isGuest ? 'N/A (disponible para usuarios registrados)' : (tdee ? tdee.toFixed(0) : 'N/A'))
+    .replace('[TARGET_CALORIES_PLACEHOLDER]', isGuest ? 'N/A' : (nutrientTargets?.calories?.toFixed(0) || 'N/A'))
+    .replace('[TARGET_PROTEIN_PLACEHOLDER]', isGuest ? 'N/A' : (nutrientTargets?.protein?.toFixed(0) || 'N/A'))
+    .replace('[TARGET_CARBS_PLACEHOLDER]', isGuest ? 'N/A' : (nutrientTargets?.carbs?.toFixed(0) || 'N/A'))
+    .replace('[TARGET_FATS_PLACEHOLDER]', isGuest ? 'N/A' : (nutrientTargets?.fats?.toFixed(0) || 'N/A'))
+    .replace('[CONSUMED_CALORIES_PLACEHOLDER]', isGuest ? 'N/A' : (dailyIntake?.caloriesConsumed?.toFixed(0) || '0'))
+    .replace('[CONSUMED_PROTEIN_PLACEHOLDER]', isGuest ? 'N/A' : (dailyIntake?.proteinConsumed?.toFixed(0) || '0'))
+    .replace('[CONSUMED_CARBS_PLACEHOLDER]', isGuest ? 'N/A' : (dailyIntake?.carbsConsumed?.toFixed(0) || '0'))
+    .replace('[CONSUMED_FATS_PLACEHOLDER]', isGuest ? 'N/A' : (dailyIntake?.fatsConsumed?.toFixed(0) || '0'))
+    .replace(/\[USER_DIETARY_APPROACHES_PLACEHOLDER\]/g, isGuest ? 'ninguno' : ((userProfile.dietaryApproaches || []).join(', ') || 'ninguno especificado'))
+    .replace(/\[USER_DIETARY_RESTRICTIONS_PLACEHOLDER\]/g, isGuest ? 'ninguna' : ((userProfile.dietaryRestrictions || []).join(', ') || 'ninguna especificada'))
+    .replace(/\[USER_SUPPLEMENT_USAGE_PLACEHOLDER\]/g, isGuest ? 'no especificado' : (userProfile.currentSupplementUsage || 'no especificado'))
+    .replace(/\[USER_SUPPLEMENT_DETAILS_PLACEHOLDER\]/g, isGuest ? 'ninguno' : (userProfile.supplementInterestOrUsageDetails || 'ninguno'))
+    .replace(/\[USER_WELLNESS_FOCUS_PLACEHOLDER\]/g, isGuest ? 'ninguna' : ((userProfile.wellnessFocusAreas || []).join(', ') || 'ninguna especificada'))
+    .replace(/\[USER_MOOD_TODAY_PLACEHOLDER\]/g, isGuest ? 'no especificado': (userProfile.moodToday || 'no especificado'))
+    .replace(/\[USER_TRAINED_TODAY_PLACEHOLDER\]/g, isGuest ? 'no especificado': (userProfile.trainedToday || 'no especificado'))
+    .replace(/\[USER_HAD_BREAKFAST_PLACEHOLDER\]/g, isGuest ? 'no especificado': (userProfile.hadBreakfast || 'no especificado'))
+    .replace(/\[USER_ENERGY_LEVEL_PLACEHOLDER\]/g, isGuest ? 'no especificado': (userProfile.energyLevel || 'no especificado'))
+    .replace(/\[USER_SLEEP_HOURS_PLACEHOLDER\]/g, isGuest ? 'no especificado': (userProfile.sleepHours || 'no especificado'))
+    .replace(/\[USER_SLEEP_QUALITY_PLACEHOLDER\]/g, isGuest ? 'no especificada': (userProfile.sleepQuality || 'no especificada'))
+    .replace(/\[USER_LAST_CHECK_IN_TIMESTAMP_PLACEHOLDER\]/g, isGuest ? 'nunca': (userProfile.lastCheckInTimestamp?.toString() || 'nunca'))
+    .replace(/\[USER_SPORTS_DISCIPLINE_PLACEHOLDER\]/g, isGuest ? 'No especificada' : (userProfile.sportsDiscipline || 'No especificada'))
+    .replace(/\[USER_POSITION_PLACEHOLDER\]/g, isGuest ? 'No especificada' : (userProfile.position || 'No especificada'))
+    .replace(/\[USER_ATHLETIC_GOALS_PLACEHOLDER\]/g, isGuest ? 'No especificados' : ((userProfile.athleticGoals || []).join(', ') || 'No especificados'))
     .replace(new RegExp(PersonalGoal.GainMuscleImproveComposition, 'g'), PersonalGoal.GainMuscleImproveComposition) 
     .replace(new RegExp(AthleticGoalOptions.MuscleGainPower, 'g'), AthleticGoalOptions.MuscleGainPower)
     .replace(/\[IF_ATHLETE_PROFILE_CONTEXT_PLACEHOLDER\]/g, athleteContextForPrompt ? athleteContextForPrompt : '')
@@ -195,10 +210,10 @@ El usuario ha proporcionado una imagen. Por favor, analízala.
   }
 
   if (audioInput && audioInput.base64Data && audioInput.mimeType) {
-    if (!userInput || !userInput.trim()) {
-        userTurnParts.push({ text: "(El usuario ha enviado una consulta por audio. Por favor, transcríbela y responde. Si parece ser un registro de comida, intenta estimar sus nutrientes.)"});
-    } else {
-        userTurnParts.push({ text: "(Contexto adicional: Se ha incluido audio del usuario.)"});
+    if (!userInput || !userInput.trim()) { // If audio is the primary input
+        userTurnParts.push({ text: "(El usuario ha enviado una consulta por audio. Por favor, procesa el audio según las instrucciones generales.)"});
+    } else if (userInput && audioInput) { // If user typed something AND then sent audio (less common for this app's flow but to be safe)
+        userTurnParts.push({ text: "(Contexto adicional para el audio enviado.)"}); // Or keep the original userInput text
     }
     userTurnParts.push({
       inlineData: {
@@ -210,7 +225,7 @@ El usuario ha proporcionado una imagen. Por favor, analízala.
   
   if (imageInput && imageInput.base64Data && imageInput.mimeType) {
      if (!userInput || !userInput.trim()) { 
-        userTurnParts.push({ text: "Analiza la imagen que he enviado. Si es comida, intenta estimar sus nutrientes para mi registro diario." });
+        userTurnParts.push({ text: "Analiza la imagen que he enviado." + (isGuest ? " Soy un usuario invitado." : " Si es comida, intenta estimar sus nutrientes para mi registro diario.") });
     }
     userTurnParts.push({
       inlineData: {
@@ -222,7 +237,7 @@ El usuario ha proporcionado una imagen. Por favor, analízala.
 
   if (userTurnParts.length === 0) {
     console.warn("Gemini: No user input (text, audio, or image) provided. Sending default.");
-    userTurnParts.push({text: "El usuario no proporcionó entrada. Saluda e inicia un check-in diario si es apropiado según las directrices."}) 
+    userTurnParts.push({text: "El usuario no proporcionó entrada. Saluda e inicia un check-in diario si es apropiado según las directrices, o da la bienvenida si es invitado."}) 
   }
   
   try {
@@ -236,7 +251,8 @@ El usuario ha proporcionado una imagen. Por favor, analízala.
 
     const rawText = response.text;
     if (rawText) {
-        const estimatedIntake = parseEstimatedFoodIntake(rawText);
+        // Only parse food estimation if not a guest and image was not primary input without details
+        const estimatedIntake = (!isGuest && !(imageInput && !userInput)) ? parseEstimatedFoodIntake(rawText) : undefined;
         const cleanedText = cleanResponseText(rawText);
         return { text: stripSpeakTags(cleanedText), estimatedIntake };
     } else {

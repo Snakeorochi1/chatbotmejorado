@@ -14,7 +14,9 @@ interface ChatWindowProps {
   onToggleListening: () => void; 
   micPermissionError: string | null;
   chatInputRef: React.RefObject<HTMLInputElement>;
-  onOpenCamera: () => void; // New prop to handle opening camera
+  onOpenCamera: () => void;
+  isGuest: boolean;
+  onFeedback: (messageId: string, feedback: 'up' | 'down') => void;
 }
 
 export const ChatWindow: React.FC<ChatWindowProps> = ({
@@ -26,7 +28,9 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
   onToggleListening, 
   micPermissionError,
   chatInputRef,
-  onOpenCamera, // Destructure new prop
+  onOpenCamera,
+  isGuest,
+  onFeedback,
 }) => {
   const [input, setInput] = useState('');
 
@@ -38,6 +42,12 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
       }
     }
   }, [isListening, chatInputRef]);
+
+  useEffect(() => {
+    if (chatContainerRef.current) {
+      chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
+    }
+  }, [messages, isLoading]); // Scroll to bottom when messages or loading state change
 
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -58,28 +68,39 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
     }
   };
 
+  const cameraButtonTitle = isGuest ? "Regístrate para usar la cámara" : "Abrir cámara para enviar imagen";
+
   return (
-    <div className="flex flex-col h-full bg-slate-700">
-      <div ref={chatContainerRef} className="flex-grow overflow-y-auto p-4 space-y-4 custom-scrollbar">
-        {messages.map((msg) => (
-          <ChatMessage
-            key={msg.id}
-            message={msg}
-          />
-        ))}
-        {isLoading && messages.length > 0 && messages[messages.length -1].sender === 'user' && (
-          <div className="flex justify-start animate-fadeIn">
-             <div className={`flex items-start max-w-md lg:max-w-lg flex-row space-x-2 rtl:space-x-reverse`}>
-                <div className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center mt-1 bg-slate-800 shadow-md`}>
-                    <NutriKickIcon className="text-2xl" />
-                </div>
-                <div className="bg-slate-600 text-slate-300 p-3 rounded-xl rounded-bl-none shadow-md">
-                    <LoadingSpinner size="sm" color="text-slate-400"/> <span className="ml-2 text-sm text-slate-400">Nutri-Kick AI está procesando... 🤔</span>
-                </div>
+    <div className="flex flex-col flex-grow bg-slate-700">
+      {/* Messages Area - Refactored for robust scrolling */}
+      <div className="relative flex-grow min-h-0"> {/* ADDED min-h-0 HERE */}
+        <div 
+          ref={chatContainerRef} 
+          className="absolute inset-0 overflow-y-auto p-4 space-y-4 custom-scrollbar"
+        >
+          {messages.map((msg) => (
+            <ChatMessage
+              key={msg.id}
+              message={msg}
+              onFeedback={onFeedback}
+            />
+          ))}
+          {isLoading && messages.length > 0 && messages[messages.length -1].sender === 'user' && (
+            <div className="flex justify-start animate-fadeIn">
+               <div className={`flex items-start max-w-md lg:max-w-lg flex-row space-x-2 rtl:space-x-reverse`}>
+                  <div className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center mt-1 bg-slate-800 shadow-md`}>
+                      <NutriKickIcon className="text-2xl" />
+                  </div>
+                  <div className="bg-slate-600 text-slate-300 p-3 rounded-xl rounded-bl-none shadow-md">
+                      <LoadingSpinner size="sm" color="text-slate-400"/> <span className="ml-2 text-sm text-slate-400">Nutri-Kick AI está procesando... 🤔</span>
+                  </div>
+              </div>
             </div>
-          </div>
-        )}
+          )}
+        </div>
       </div>
+
+      {/* Input Form Area */}
       <form onSubmit={handleSubmit} className="p-4 border-t border-slate-600 bg-slate-800">
         {micPermissionError && (
             <p className="text-xs text-red-400 mb-1 text-center animate-fadeIn">{micPermissionError}</p>
@@ -114,9 +135,10 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
            <button
             type="button"
             onClick={onOpenCamera}
-            disabled={isLoading || isListening}
-            className="p-3 rounded-lg transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-slate-800 shadow-sm hover:shadow-md bg-teal-600 hover:bg-teal-700 text-white focus:ring-teal-600 disabled:bg-slate-500 disabled:text-slate-400 disabled:cursor-not-allowed"
-            aria-label="Abrir cámara para enviar imagen"
+            disabled={isLoading || isListening || isGuest}
+            className={`p-3 rounded-lg transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-slate-800 shadow-sm hover:shadow-md ${isGuest ? 'bg-slate-500 text-slate-400 cursor-not-allowed' : 'bg-teal-600 hover:bg-teal-700 text-white focus:ring-teal-600'} disabled:bg-slate-500 disabled:text-slate-400 disabled:cursor-not-allowed`}
+            aria-label={cameraButtonTitle}
+            title={cameraButtonTitle}
           >
             <CameraIcon className="w-6 h-6"/>
           </button>

@@ -1,5 +1,4 @@
-
-
+// Existing UserProfile and Message interfaces ... (no changes here, just for context)
 export interface UserProfile {
   name: string;
   email: string;
@@ -29,10 +28,12 @@ export interface UserProfile {
   wellnessFocusAreas?: string[];
 
   // New fields for "daily check-in"
-  moodToday?: string;
-  trainedToday?: string; 
-  hadBreakfast?: string; 
-  energyLevel?: string; 
+  moodToday?: string; // Represents MoodTodayOptions
+  trainedToday?: string; // Represents TrainedTodayOptions
+  hadBreakfast?: string; // Represents HadBreakfastOptions
+  energyLevel?: string; // Represents EnergyLevelOptions
+  sleepHours?: string; // e.g., "7", "6-7", "8.5"
+  sleepQuality?: SleepQualityOptions | "";
   lastCheckInTimestamp?: number; // Unix timestamp
 }
 
@@ -41,14 +42,15 @@ export interface Message {
   sender: 'user' | 'ai';
   text: string;
   timestamp: Date;
+  feedback?: 'up' | 'down' | null; // Added for feedback
 }
 
+// --- Start of existing enums (no changes) ---
 export enum Gender {
   Male = "Masculino",
   Female = "Femenino",
 }
 
-// ---- Original Enums (TrainingLoad, TrainingFrequency remain athlete/non-athlete specific) ----
 export enum FootballPosition {
   Goalkeeper = "Portero",
   Defender = "Defensa",
@@ -57,7 +59,7 @@ export enum FootballPosition {
   Versatile = "Versátil / Otro (Fútbol)"
 }
 
-export enum TrainingLoad { // Primarily for athletes with structured training
+export enum TrainingLoad { 
   RestDay = "Día de Descanso / Recuperación Activa", 
   LightTraining = "Entrenamiento Ligero / Técnico", 
   ModerateTraining = "Entrenamiento Moderado / Táctico",
@@ -65,7 +67,7 @@ export enum TrainingLoad { // Primarily for athletes with structured training
   MatchDay = "Día de Partido / Competición" 
 }
 
-export enum TrainingFrequency { // Primarily for non-athletes or general fitness
+export enum TrainingFrequency { 
   NoneOrRarely = "No entreno o menos de 2 veces por semana", 
   TwoToThree = "2-3 veces por semana", 
   FourTimes = "4 veces por semana",    
@@ -73,7 +75,6 @@ export enum TrainingFrequency { // Primarily for non-athletes or general fitness
   DailyOrMore = "7 o más veces por semana (diario o más)" 
 }
 
-// Revised PersonalGoal enum for more general goals
 export enum PersonalGoal { 
   LoseWeightHealthy = "Perder peso de forma saludable",
   GainMuscleImproveComposition = "Aumentar masa muscular y mejorar composición corporal",
@@ -83,7 +84,6 @@ export enum PersonalGoal {
   ImproveGeneralPhysicalPerformance = "Mejorar mi rendimiento físico general (no competitivo)"
 }
 
-// ---- New Enums for Athlete Profile Enhancement ----
 export enum SportsDiscipline {
   Football = "Fútbol",
   Basketball = "Baloncesto (Basketball)",
@@ -147,10 +147,7 @@ export enum AthleticGoalOptions {
   ImproveReactionTime = "Mejorar tiempo de reacción (para eSports u otros)",
   MentalFocus = "Mejorar concentración y enfoque mental deportivo"
 }
-// ---- End of New Athlete Enums ----
 
-
-// ---- New Enums for Dietary Preferences and Restrictions ----
 export enum DietaryApproachOptions {
   Vegetarian = "Vegetariano (no come carne ni pescado)",
   Vegan = "Vegano (no come ningún producto animal)",
@@ -178,7 +175,6 @@ export enum DietaryRestrictionOptions {
   AvoidsRedMeat = "Evito carnes rojas",
   OtherSpecifyInChat = "Otro (especificaré en el chat si es necesario)",
 }
-// ---- End of Dietary Enums ----
 
 export enum WellnessFocusAreaOptions {
   ImproveEnergy = "Mejorar niveles de energía",
@@ -206,7 +202,8 @@ export enum TrainedTodayOptions {
   Moderate = "Sí, entrenamiento moderado 👍",
   Light = "Sí, entrenamiento ligero 👟",
   RestDay = "No, día de descanso 🧘",
-  NotYet = "Aún no he entrenado hoy ⏳"
+  NotYet = "Aún no he entrenado hoy ⏳",
+  NoDidNotTrain = "No, hoy no entrené (otro motivo) 🚫" // Nueva opción
 }
 
 export enum HadBreakfastOptions {
@@ -223,6 +220,16 @@ export enum EnergyLevelOptions {
   Low = "Bajo 📉",
   VeryLow = "Muy bajo 😩"
 }
+
+// ---- New Enum for Sleep Quality ----
+export enum SleepQualityOptions {
+  Excellent = "Excelente 🌟",
+  Good = "Buena 👍",
+  Regular = "Regular 😐",
+  Poor = "Mala 👎"
+}
+// ---- End of New Enum ----
+
 
 export interface DailyIntake {
   date: string; // YYYY-MM-DD format
@@ -246,3 +253,30 @@ export interface EstimatedFoodIntake {
   carbs: number;
   fats: number;
 }
+
+// ---- New Types for Supabase Auth ----
+export interface SupabaseUser {
+  id: string;
+  email?: string;
+  // Add other user properties from Supabase if needed
+}
+
+export interface SupabaseSession {
+  user: SupabaseUser;
+  access_token: string;
+  // Add other session properties from Supabase if needed
+}
+// ---- End of New Auth Types ----
+
+// ---- New Type for Admin Panel ----
+export interface AdminUserView {
+  id: string; // user_id from Supabase auth (user_profiles.id)
+  name: string | null;
+  email: string | null;
+  last_updated_at: string | null; // from user_profiles.last_updated_at
+  is_athlete: boolean | null;
+  gender: string | null;
+  goals: string | null; // This corresponds to PersonalGoal enum
+  age: string | null; // Stored as string, needs parsing for calculations
+}
+// ---- End of New Admin Panel Type ----
