@@ -359,13 +359,16 @@ const App: React.FC = () => {
         if (profileToSave.moodToday !== oldProfile.moodToday ||
             profileToSave.trainedToday !== oldProfile.trainedToday ||
             profileToSave.hadBreakfast !== oldProfile.hadBreakfast ||
-            profileToSave.energyLevel !== oldProfile.energyLevel) {
+            profileToSave.energyLevel !== oldProfile.energyLevel ||
+            profileToSave.sleepHours !== oldProfile.sleepHours || // Added sleep check
+            profileToSave.sleepQuality !== oldProfile.sleepQuality // Added sleep check
+           ) {
               dailyCheckInFieldsActuallyModified = true;
         }
         
         if (dailyCheckInFieldsActuallyModified) {
             // If any daily check-in field has a value, update the timestamp
-            if (profileToSave.moodToday || profileToSave.trainedToday || profileToSave.hadBreakfast || profileToSave.energyLevel) {
+            if (profileToSave.moodToday || profileToSave.trainedToday || profileToSave.hadBreakfast || profileToSave.energyLevel || profileToSave.sleepHours || profileToSave.sleepQuality) {
                 profileToSave.lastCheckInTimestamp = Date.now();
             } else { 
                 // If all daily check-in fields are cleared, remove the timestamp
@@ -483,20 +486,16 @@ const App: React.FC = () => {
         }
     } // End of isMainUpdate check
 
-    // Trigger editing complete *after* all state updates from profile saving are done,
-    // including the potential AI message.
-    if(isMainUpdate && !(profileToSave.moodToday || profileToSave.trainedToday || profileToSave.hadBreakfast || profileToSave.energyLevel)){ // Check if daily check-in section will be shown
-        // If it's a main update and daily check-in is not yet shown (because no daily check-in data was entered during the main profile save),
-        // editing is not "complete" until daily check-in is also handled or skipped via its own section.
-        // The ProfileEditor component will manage showing the daily check-in section after main save.
-    } else {
-        // If it's daily check-in update, or main update where daily check-in was already handled/skipped (or data entered).
-        handleProfileEditingComplete();
-    }
+    // This section was causing premature redirection to chat. 
+    // The ProfileEditor now controls when it's done (after main save AND daily check-in section interaction).
+    // if(isMainUpdate && !(profileToSave.moodToday || profileToSave.trainedToday || profileToSave.hadBreakfast || profileToSave.energyLevel)){ 
+    // } else {
+    //     handleProfileEditingComplete();
+    // }
     
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userProfile, currentSession, isGuestSession, handleProfileEditingComplete]);
-  // The line above contained 'dailyIntake' and 'nutrientTargets' which are not used in handleProfileUpdate and cause unnecessary re-renders.
-  // Also 'showDailyCheckInSection' was removed as its state is internal to ProfileEditor and doesn't directly influence App's handleProfileUpdate logic flow for completion.
+  
 
   const handleClearLocalStorage = () => {
     if (confirm("¿Estás seguro de que quieres borrar tu historial de chat y registro de comidas de este navegador? Tu perfil guardado en la nube no se verá afectado.")) {

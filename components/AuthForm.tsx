@@ -159,32 +159,4 @@ export const AuthForm: React.FC<AuthFormProps> = ({
               onChange={(e) => setRememberEmail(e.target.checked)}
               className="h-4 w-4 text-orange-500 focus:ring-orange-500 border-slate-400 bg-slate-500 rounded"
             />
-            <label htmlFor="remember-email" className="ml-2 block text-sm text-slate-300">
-              Recordar correo
-            </label>
-          </div>
-        </div>
-        <div className="pt-2">
-          <button type="submit" disabled={isLoading} className={primaryButtonClasses}>
-            {isLoading ? (isLogin ? 'Iniciando sesión...' : 'Creando cuenta...') : (isLogin ? 'Iniciar Sesión' : 'Crear Cuenta')}
-          </button>
-        </div>
-      </form>
-      <div className="mt-6 text-center">
-        <button
-          onClick={() => {
-            setIsLogin(!isLogin);
-            setAuthError(null);
-            // Optionally clear fields, or keep them if user misclicked
-            // setEmail(''); 
-            // setPassword('');
-            // setConfirmPassword('');
-          }}
-          className="text-sm text-orange-400 hover:text-orange-300 hover:underline focus:outline-none"
-        >
-          {isLogin ? '¿No tienes cuenta? Crea una aquí.' : '¿Ya tienes cuenta? Inicia sesión.'}
-        </button>
-      </div>
-    </div>
-  );
-};
+            <label htmlFor="remember-email" className="ml-2
