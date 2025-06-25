@@ -195,4 +195,10 @@ export const AdminPanel: React.FC = () => {
                   ))}
                 </tbody>
               </table>
-            
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+};
