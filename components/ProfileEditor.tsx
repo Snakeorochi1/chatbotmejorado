@@ -1,12 +1,11 @@
 
-
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   UserProfile, Gender, FootballPosition, TrainingLoad, TrainingFrequency, PersonalGoal,
   DietaryApproachOptions, DietaryRestrictionOptions, 
   WellnessFocusAreaOptions, MoodTodayOptions, TrainedTodayOptions, HadBreakfastOptions, EnergyLevelOptions,
   SportsDiscipline, BasketballPosition, BaseballPosition, VolleyballPosition, AthleticGoalOptions,
-  SleepQualityOptions // Import SleepQualityOptions
+  SleepQualityOptions 
 } from '../types';
 import { TrashIcon } from './Icons';
 
@@ -15,8 +14,7 @@ interface ProfileEditorProps {
   onUpdateProfile: (profile: UserProfile, isMainUpdate: boolean) => void;
   onEditingComplete: () => void;
   isActive: boolean;
-  onClearCache: () => void;
-  isGuest: boolean; // New prop
+  isGuest: boolean;
 }
 
 interface ValidationError {
@@ -33,15 +31,12 @@ const localInitialDefaultUserProfile: UserProfile = {
   height: '',
   gender: "",
   isAthlete: false,
-  // Athlete specific
   sportsDiscipline: undefined,
   customSportsDiscipline: '',
   position: '',
   trainingLoad: TrainingLoad.LightTraining,
   athleticGoals: [],
-  // Non-athlete specific
   trainingFrequency: TrainingFrequency.NoneOrRarely,
-  // Common
   goals: "" as PersonalGoal | "",
   dietaryApproaches: [],
   dietaryRestrictions: [],
@@ -52,8 +47,8 @@ const localInitialDefaultUserProfile: UserProfile = {
   trainedToday: '',
   hadBreakfast: '',
   energyLevel: '',
-  sleepHours: '', // Added
-  sleepQuality: "", // Added
+  sleepHours: '', 
+  sleepQuality: "", 
   lastCheckInTimestamp: undefined,
 };
 
@@ -244,6 +239,7 @@ const getInitialEditorProfileState = (initialPropsProfile: UserProfile): UserPro
     profileBase.currentSupplementUsage = initialPropsProfile.currentSupplementUsage || "Prefiero no decirlo";
     profileBase.supplementInterestOrUsageDetails = initialPropsProfile.supplementInterestOrUsageDetails || '';
     
+    // Check-in fields are now managed by DailyCheckInPanel, so ensure they are initialized but not shown here
     profileBase.moodToday = initialPropsProfile.moodToday || '';
     profileBase.trainedToday = initialPropsProfile.trainedToday || '';
     profileBase.hadBreakfast = initialPropsProfile.hadBreakfast || '';
@@ -261,8 +257,7 @@ export const ProfileEditor: React.FC<ProfileEditorProps> = ({
   onUpdateProfile, 
   onEditingComplete, 
   isActive, 
-  onClearCache,
-  isGuest // Destructure new prop
+  isGuest
 }) => {
   const [profile, setProfile] = useState<UserProfile>(() => getInitialEditorProfileState(initialProfile));
   const [isAthlete, setIsAthlete] = useState<boolean>(() => typeof initialProfile.isAthlete === 'boolean' ? initialProfile.isAthlete : false);
@@ -276,12 +271,11 @@ export const ProfileEditor: React.FC<ProfileEditorProps> = ({
   const [currentPositionOptions, setCurrentPositionOptions] = useState<Record<string, string> | null>(null);
   const [showPositionField, setShowPositionField] = useState<boolean>(true);
   const [positionInputType, setPositionInputType] = useState<'select' | 'text' | 'none'>('none');
-  const [showDailyCheckInSection, setShowDailyCheckInSection] = useState<boolean>(false);
   
   const formRef = useRef<HTMLFormElement>(null);
 
   useEffect(() => {
-    if (isGuest) return; // Don't run profile logic for guests
+    if (isGuest) return; 
     const newResolvedProfile = getInitialEditorProfileState(initialProfile);
     setProfile(newResolvedProfile);
     setIsAthlete(newResolvedProfile.isAthlete);
@@ -294,7 +288,6 @@ export const ProfileEditor: React.FC<ProfileEditorProps> = ({
   useEffect(() => {
     if (isGuest) return;
     if (isActive) {
-      setShowDailyCheckInSection(false);
       setValidationErrors([]); 
     }
   }, [isActive, isGuest]); 
@@ -425,22 +418,7 @@ export const ProfileEditor: React.FC<ProfileEditorProps> = ({
       return;
     }
     onUpdateProfile(profileToUpdate, true); 
-    setShowDailyCheckInSection(true); 
-  };
-
-  const handleDailyCheckInSave = () => {
-    if (isGuest) return;
-    const profileWithCurrentPhone = {
-        ...profile,
-        phone: localPhoneCountryCode + localPhonePart.replace(/\D/g, '')
-    };
-    onUpdateProfile(profileWithCurrentPhone, false); 
-    onEditingComplete();
-  };
-
-  const handleSkipDailyCheckIn = () => {
-    if (isGuest) return;
-    onEditingComplete();
+    onEditingComplete(); // Navigate to chat after saving main profile
   };
   
   const commonSelectClasses = "mt-1 block w-full px-3 py-2 bg-slate-600 border border-slate-500 text-slate-100 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-orange-500 sm:text-sm transition-colors placeholder-slate-400";
@@ -449,8 +427,7 @@ export const ProfileEditor: React.FC<ProfileEditorProps> = ({
   const checkboxLabelClasses = "ml-2 text-sm text-slate-200";
   const checkboxInputClasses = "form-checkbox h-4 w-4 text-orange-500 bg-slate-500 border-slate-400 rounded focus:ring-orange-500 focus:ring-offset-slate-700";
   const primaryButtonClasses = "w-full flex justify-center py-3 px-4 border border-transparent rounded-lg shadow-md text-sm font-medium text-white bg-orange-600 hover:bg-orange-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-slate-700 focus:ring-orange-600 transition-transform transform hover:scale-105 active:scale-95 disabled:bg-slate-500 disabled:text-slate-400 disabled:cursor-not-allowed disabled:hover:scale-100";
-  const secondaryButtonClasses = "w-full flex justify-center py-2 px-4 border border-slate-500 rounded-lg shadow-sm text-sm font-medium text-slate-200 bg-slate-600 hover:bg-slate-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-slate-700 focus:ring-orange-500 transition-colors";
-
+  
   const focusField = (fieldId: string) => {
     const fieldElement = document.getElementById(fieldId);
     if (fieldElement) {
@@ -472,14 +449,9 @@ export const ProfileEditor: React.FC<ProfileEditorProps> = ({
 
   return (
     <div className="p-4 md:p-6 bg-slate-700 text-slate-200 rounded-lg shadow-xl animate-fadeIn">
-      {!showDailyCheckInSection && (
-        <h2 className="text-2xl font-semibold text-slate-100 mb-6 border-b pb-3 border-slate-600">Tu Perfil Nutricional 📝</h2>
-      )}
-      {showDailyCheckInSection && (
-         <h2 className="text-2xl font-semibold text-slate-100 mb-6 border-b pb-3 border-slate-600">Check-in Diario (Opcional)</h2>
-      )}
+      <h2 className="text-2xl font-semibold text-slate-100 mb-6 border-b pb-3 border-slate-600">Tu Perfil Nutricional 📝</h2>
 
-      {validationErrors.length > 0 && !showDailyCheckInSection && (
+      {validationErrors.length > 0 && (
         <div className="bg-red-700/30 border border-red-500 text-red-300 px-4 py-3 rounded-md mb-6 shadow-md animate-fadeIn" role="alert">
           <p className="font-bold text-red-200">Por favor, corrige los siguientes errores:</p>
           <ul className="list-disc list-inside mt-2 text-sm space-y-1">
@@ -499,8 +471,6 @@ export const ProfileEditor: React.FC<ProfileEditorProps> = ({
       )}
 
       <form ref={formRef} onSubmit={handleMainSubmit} className="space-y-6">
-        {!showDailyCheckInSection && (
-          <>
             <fieldset className="border border-slate-600 p-4 rounded-md">
               <legend className="text-lg font-medium text-orange-400 px-2">Información Básica</legend>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-4">
@@ -714,59 +684,10 @@ export const ProfileEditor: React.FC<ProfileEditorProps> = ({
             </fieldset>
             <div className="pt-6">
               <button type="submit" disabled={!isSubmitEnabled && validationErrors.length > 0} className={primaryButtonClasses} aria-live="polite">
-                {isSubmitEnabled || validationErrors.length === 0 ? 'Actualizar Perfil y Ver Check-in Diario ➡️' : 'Revisa los campos marcados (*)'}
+                {isSubmitEnabled || validationErrors.length === 0 ? 'Guardar Perfil Principal 💾' : 'Revisa los campos marcados (*)'}
               </button>
             </div>
-            {/* Removed "Borrar datos locales" button and its descriptive text */}
-          </>
-        )}
       </form>
-
-      {showDailyCheckInSection && !isGuest && (
-        <div className="animate-fadeIn mt-8 pt-6 border-t border-slate-600">
-           <p className="text-sm text-slate-300 mb-4">¡Perfil principal guardado! Ahora, si lo deseas, puedes agregar tu check-in de hoy.</p>
-          <fieldset className="border border-slate-600 p-4 rounded-md">
-            <legend className="text-lg font-medium text-orange-400 px-2">Check-in Diario</legend>
-            <p className="text-xs text-slate-400 mb-3">Esta información ayuda a la IA a entender tu estado actual. También te podrá preguntar esto en el chat.</p>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-4">
-              <div>
-                <label htmlFor="moodToday" className="block text-sm font-medium text-slate-300 mb-1">¿Cómo te sientes hoy? 😊</label>
-                <select name="moodToday" id="moodToday" value={profile.moodToday || ''} onChange={handleChange} className={commonSelectClasses}> <option value="">No especificar</option> {Object.values(MoodTodayOptions).map(opt => <option key={opt} value={opt}>{opt}</option>)} </select>
-              </div>
-              <div>
-                <label htmlFor="trainedToday" className="block text-sm font-medium text-slate-300 mb-1">¿Entrenamiento de hoy? 💪</label>
-                <select name="trainedToday" id="trainedToday" value={profile.trainedToday || ''} onChange={handleChange} className={commonSelectClasses}>
-                  <option value="">No especificar</option>
-                  {Object.values(TrainedTodayOptions).map(opt => <option key={opt} value={opt}>{opt}</option>)}
-                </select>
-              </div>
-              <div>
-                <label htmlFor="hadBreakfast" className="block text-sm font-medium text-slate-300 mb-1">¿Desayunaste? 🥞</label>
-                <select name="hadBreakfast" id="hadBreakfast" value={profile.hadBreakfast || ''} onChange={handleChange} className={commonSelectClasses}> <option value="">No especificar</option> {Object.values(HadBreakfastOptions).map(opt => <option key={opt} value={opt}>{opt}</option>)} </select>
-              </div>
-              <div>
-                <label htmlFor="energyLevel" className="block text-sm font-medium text-slate-300 mb-1">Nivel de Energía Hoy ⚡</label>
-                <select name="energyLevel" id="energyLevel" value={profile.energyLevel || ''} onChange={handleChange} className={commonSelectClasses}> <option value="">No especificar</option> {Object.values(EnergyLevelOptions).map(opt => <option key={opt} value={opt}>{opt}</option>)} </select>
-              </div>
-              <div>
-                <label htmlFor="sleepHours" className="block text-sm font-medium text-slate-300 mb-1">Horas de Sueño (aprox.) 😴</label>
-                <input type="text" name="sleepHours" id="sleepHours" value={profile.sleepHours || ''} onChange={handleChange} className={commonInputClasses} placeholder="Ej: 7, 6.5, 7-8" />
-              </div>
-              <div>
-                <label htmlFor="sleepQuality" className="block text-sm font-medium text-slate-300 mb-1">Calidad del Sueño Percibida ✨</label>
-                <select name="sleepQuality" id="sleepQuality" value={profile.sleepQuality || ''} onChange={handleChange} className={commonSelectClasses}>
-                  <option value="">No especificar</option>
-                  {Object.values(SleepQualityOptions).map(opt => <option key={opt} value={opt}>{opt}</option>)}
-                </select>
-              </div>
-            </div>
-          </fieldset>
-          <div className="mt-6 flex flex-col sm:flex-row gap-4">
-            <button onClick={handleDailyCheckInSave} className={primaryButtonClasses}> Guardar Check-in y Ver Chat ✅ </button>
-            <button onClick={handleSkipDailyCheckIn} className={secondaryButtonClasses}> Omitir e Ir al Chat ⏭️ </button>
-          </div>
-        </div>
-      )}
     </div>
   );
 };

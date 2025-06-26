@@ -1,12 +1,11 @@
 
-
-import React, { useState, useEffect } from 'react';
-import { fetchAllUserProfilesForAdmin } from '../services/supabaseService';
-import { AdminUserView } from '../types';
+import React, { useState, useEffect, useCallback } from 'react';
+import { fetchAllUserProfilesForAdmin, fetchUserProfileForAdmin, deleteUserProfileForAdmin } from '../services/supabaseService';
+import { AdminUserView, UserProfile } from '../types';
 import { LoadingSpinner } from './LoadingSpinner';
-import { UserIcon, ProfileIcon, ChartBarIcon } from './Icons'; // Added
+import { UserIcon, ProfileIcon, ChartBarIcon, TrashIcon, CloseIcon } from './Icons';
+import { AdminUserDetailModal } from './AdminUserDetailModal';
 
-// Added export here
 export const AdminPanel: React.FC = () => {
   const [users, setUsers] = useState<AdminUserView[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
@@ -14,22 +13,30 @@ export const AdminPanel: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState<string>('');
   const [sortConfig, setSortConfig] = useState<{ key: keyof AdminUserView; direction: 'ascending' | 'descending' } | null>(null);
 
-  useEffect(() => {
-    const loadUsers = async () => {
-      setIsLoading(true);
-      setError(null);
-      try {
-        const fetchedUsers = await fetchAllUserProfilesForAdmin();
-        setUsers(fetchedUsers);
-      } catch (err: any) {
-        setError(err.message || 'Error al cargar usuarios.');
-        console.error("AdminPanel Error:", err);
-      } finally {
-        setIsLoading(false);
-      }
-    };
-    loadUsers();
+  const [selectedUserDetail, setSelectedUserDetail] = useState<UserProfile | null>(null);
+  const [isDetailModalOpen, setIsDetailModalOpen] = useState<boolean>(false);
+  const [loadingUserDetail, setLoadingUserDetail] = useState<boolean>(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [actionSuccess, setActionSuccess] = useState<string | null>(null);
+  const [isDeletingUser, setIsDeletingUser] = useState<boolean>(false);
+
+  const loadUsers = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const fetchedUsers = await fetchAllUserProfilesForAdmin();
+      setUsers(fetchedUsers);
+    } catch (err: any) {
+      setError(err.message || 'Error al cargar usuarios.');
+      console.error("AdminPanel Error:", err);
+    } finally {
+      setIsLoading(false);
+    }
   }, []);
+
+  useEffect(() => {
+    loadUsers();
+  }, [loadUsers]);
 
   const handleSort = (key: keyof AdminUserView) => {
     let direction: 'ascending' | 'descending' = 'ascending';
@@ -49,7 +56,6 @@ export const AdminPanel: React.FC = () => {
         if (aValue === null || aValue === undefined) return sortConfig.direction === 'ascending' ? -1 : 1;
         if (bValue === null || bValue === undefined) return sortConfig.direction === 'ascending' ? 1 : -1;
         
-        // Special handling for age (numeric sort)
         if (sortConfig.key === 'age') {
             const aAge = parseInt(a.age || '0');
             const bAge = parseInt(b.age || '0');
@@ -67,7 +73,6 @@ export const AdminPanel: React.FC = () => {
          if (typeof aValue === 'number' && typeof bValue === 'number') {
           return (aValue - bValue) * (sortConfig.direction === 'ascending' ? 1 : -1);
         }
-        // Fallback for dates or other types if necessary
         if (aValue < bValue) return sortConfig.direction === 'ascending' ? -1 : 1;
         if (aValue > bValue) return sortConfig.direction === 'ascending' ? 1 : -1;
         return 0;
@@ -85,6 +90,46 @@ export const AdminPanel: React.FC = () => {
   const getSortIndicator = (key: keyof AdminUserView) => {
     if (!sortConfig || sortConfig.key !== key) return null;
     return sortConfig.direction === 'ascending' ? '▲' : '▼';
+  };
+
+  const handleViewDetails = async (userId: string) => {
+    setLoadingUserDetail(true);
+    setActionError(null);
+    setSelectedUserDetail(null);
+    try {
+      const userProfile = await fetchUserProfileForAdmin(userId);
+      if (userProfile) {
+        setSelectedUserDetail(userProfile);
+        setIsDetailModalOpen(true);
+      } else {
+        setActionError("No se pudo encontrar el perfil del usuario.");
+      }
+    } catch (err: any) {
+      setActionError(err.message || "Error al cargar los detalles del usuario.");
+    } finally {
+      setLoadingUserDetail(false);
+    }
+  };
+
+  const handleDeleteUser = async (userId: string) => {
+    setIsDeletingUser(true);
+    setActionError(null);
+    setActionSuccess(null);
+    try {
+      await deleteUserProfileForAdmin(userId);
+      setActionSuccess("Perfil del usuario eliminado correctamente.");
+      setUsers(prevUsers => prevUsers.filter(user => user.id !== userId)); // Remove from local list
+      setIsDetailModalOpen(false); // Close modal on successful delete
+      setSelectedUserDetail(null);
+    } catch (err: any) {
+      setActionError(err.message || "Error al eliminar el perfil del usuario.");
+    } finally {
+      setIsDeletingUser(false);
+      setTimeout(() => { // Clear messages after a few seconds
+          setActionError(null);
+          setActionSuccess(null);
+      }, 5000);
+    }
   };
 
   const commonThClasses = "px-4 py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider cursor-pointer select-none";
@@ -121,9 +166,28 @@ export const AdminPanel: React.FC = () => {
           value={searchTerm}
           onChange={(e) => setSearchTerm(e.target.value)}
           className="mt-3 sm:mt-0 px-4 py-2 bg-slate-700 border border-slate-600 text-slate-200 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-purple-500 sm:text-sm placeholder-slate-400"
+          aria-label="Buscar usuarios"
         />
       </div>
+
+      {actionSuccess && (
+        <div className="mb-4 p-3 bg-green-600/30 border border-green-500 text-green-300 rounded-md animate-fadeIn" role="alert">
+          {actionSuccess}
+        </div>
+      )}
+      {actionError && !isDetailModalOpen && ( // Show general action errors if modal is closed
+        <div className="mb-4 p-3 bg-red-700/30 border border-red-500 text-red-300 rounded-md animate-fadeIn" role="alert">
+          {actionError}
+        </div>
+      )}
       
+      {loadingUserDetail && (
+         <div className="flex justify-center items-center my-4">
+            <LoadingSpinner size="md" color="text-purple-400"/>
+            <p className="ml-2 text-slate-300">Cargando detalles del usuario...</p>
+        </div>
+      )}
+
       {filteredUsers.length === 0 && !isLoading && (
         <div className="text-center py-10">
           <UserIcon className="w-16 h-16 mx-auto text-slate-500 mb-4" />
@@ -174,16 +238,19 @@ export const AdminPanel: React.FC = () => {
                   </td>
                   <td className="px-4 py-3 whitespace-nowrap text-sm text-slate-300 hidden lg:table-cell">{user.gender || <span className="text-slate-400 italic">N/D</span>}</td>
                   <td className="px-4 py-3 text-sm text-slate-300 max-w-xs truncate hidden md:table-cell" title={user.goals || ''}>{user.goals || <span className="text-slate-400 italic">N/D</span>}</td>
-                  <td className="px-4 py-3 whitespace-nowrap text-sm text-slate-400 hidden lg:table-cell">{user.last_updated_at || <span className="text-slate-400 italic">N/D</span>}</td>
+                  <td className="px-4 py-3 whitespace-nowrap text-sm text-slate-400 hidden lg:table-cell">
+                    {user.last_updated_at ? new Date(user.last_updated_at).toLocaleDateString() : <span className="text-slate-400 italic">N/D</span>}
+                  </td>
                   <td className="px-4 py-3 whitespace-nowrap text-sm font-medium text-center">
                     <button 
-                        className="text-purple-400 hover:text-purple-300 p-1 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500" 
-                        title="Ver Perfil Completo (Próximamente)"
-                        disabled // Functionality not implemented yet
+                        onClick={() => handleViewDetails(user.id)}
+                        className="text-purple-400 hover:text-purple-300 p-1 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500 disabled:opacity-50" 
+                        title="Ver Detalles del Usuario"
+                        disabled={loadingUserDetail}
+                        aria-label={`Ver detalles de ${user.name || user.email}`}
                     >
                       <ProfileIcon className="w-5 h-5"/>
                     </button>
-                    {/* Placeholder for more actions */}
                   </td>
                 </tr>
               ))}
@@ -194,6 +261,22 @@ export const AdminPanel: React.FC = () => {
       <p className="text-xs text-slate-500 mt-6 text-center">
         Total de usuarios en la vista actual: {filteredUsers.length}
       </p>
+
+      {isDetailModalOpen && selectedUserDetail && (
+        <AdminUserDetailModal
+          user={selectedUserDetail}
+          userId={selectedUserDetail.email || selectedUserDetail.name || 'N/A'} // This should be the actual user ID from AdminUserView
+          isOpen={isDetailModalOpen}
+          onClose={() => {
+            setIsDetailModalOpen(false);
+            setSelectedUserDetail(null);
+            setActionError(null); // Clear modal-specific errors on close
+          }}
+          onDelete={handleDeleteUser}
+          isLoadingDelete={isDeletingUser}
+          actionError={actionError} // Pass modal-specific error
+        />
+      )}
     </div>
   );
 };

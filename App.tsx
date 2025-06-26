@@ -1,5 +1,4 @@
 
-
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { UserProfile, Message, Gender, SportsDiscipline, TrainingLoad, TrainingFrequency, PersonalGoal, DailyIntake, NutrientTargets, EstimatedFoodIntake, SupabaseSession, AthleticGoalOptions } from './types';
 import { generateNutriKickResponse, GeminiServiceResponse } from './services/geminiService';
@@ -17,9 +16,10 @@ import { ProfileEditor } from './components/ProfileEditor';
 import { ChatWindow } from './components/ChatWindow';
 import { AuthForm } from './components/AuthForm';
 import { AdminPanel } from './components/AdminPanel';
-import { AboutPanel } from './components/AboutPanel'; // Import AboutPanel
+import { AboutPanel } from './components/AboutPanel';
+import { DailyCheckInPanel } from './components/DailyCheckInPanel'; // Import DailyCheckInPanel
 import { DISCLAIMER_TEXT, ADMIN_EMAILS } from './constants';
-import { NutriKickIcon, ProfileIcon, ChatIcon, LogoutIcon, LoginIcon, CloseIcon, AdminIcon, AboutIcon } from './components/Icons'; // Use NutriKickIcon, Added AboutIcon
+import { NutriKickIcon, ProfileIcon, ChatIcon, LogoutIcon, LoginIcon, CloseIcon, AdminIcon, AboutIcon, CheckInIcon } from './components/Icons'; // Added CheckInIcon
 import { calculateIdealBodyWeightRange, calculateMacronutrientTargets } from './nutritionCalculators';
 import { LoadingSpinner } from './components/LoadingSpinner';
 
@@ -55,6 +55,8 @@ const initialDefaultUserProfile: UserProfile = {
   trainedToday: '',
   hadBreakfast: '',
   energyLevel: '',
+  sleepHours: '',
+  sleepQuality: "",
   lastCheckInTimestamp: undefined,
 };
 
@@ -120,7 +122,22 @@ function getSupportedMimeType(): string | undefined {
     return undefined; 
 }
 
-type ActiveTab = 'chat' | 'profile' | 'admin' | 'about'; // Added 'about'
+type ActiveTab = 'chat' | 'profile' | 'admin' | 'about' | 'checkin'; // Added 'checkin'
+
+// Helper function to check if a timestamp is from a previous day or missing
+const isTimestampFromPreviousDayOrMissing = (timestamp?: number): boolean => {
+  if (timestamp === undefined || timestamp === null) return true; // Treat missing as needing reset
+  const today = new Date();
+  today.setHours(0, 0, 0, 0); // Start of today
+
+  const checkInDate = new Date(timestamp);
+  checkInDate.setHours(0, 0, 0, 0); // Start of check-in day
+
+  return checkInDate.getTime() < today.getTime();
+};
+
+type CameraStatusMessage = "Abriendo dispositivo..." | "Configurando video..." | "Video cargado, intentando reproducir..." | "Cámara lista." | "Esperando dimensiones del video..." | "";
+
 
 const App: React.FC = () => {
   const [currentSession, setCurrentSession] = useState<SupabaseSession | null>(null);
@@ -157,6 +174,9 @@ const App: React.FC = () => {
   const videoStreamRef = useRef<MediaStream | null>(null);
   const videoElementRef = useRef<HTMLVideoElement>(null);
   const canvasElementRef = useRef<HTMLCanvasElement>(null);
+  const [isVideoStreamReady, setIsVideoStreamReady] = useState(false);
+  const [cameraStatusMessage, setCameraStatusMessage] = useState<CameraStatusMessage>("");
+
 
   const chatContainerRef = useRef<HTMLDivElement>(null); 
 
@@ -231,12 +251,26 @@ const App: React.FC = () => {
 
 
   useEffect(() => {
-    if (isGuestSession || !currentSession?.user?.id) return;
+    if (isGuestSession || !currentSession?.user?.id || authLoading) return;
 
     const userId = currentSession.user.id;
     loadUserProfileFromSupabase(userId).then(profileFromDb => {
+      let finalProfile = profileFromDb;
       if (profileFromDb) {
-        setUserProfile(profileFromDb);
+        if (isTimestampFromPreviousDayOrMissing(profileFromDb.lastCheckInTimestamp)) {
+          console.log("Daily check-in data is from a previous day or missing. Resetting for today.");
+          finalProfile = {
+            ...profileFromDb,
+            moodToday: '',
+            trainedToday: '',
+            hadBreakfast: '',
+            energyLevel: '',
+            sleepHours: '',
+            sleepQuality: "",
+            // lastCheckInTimestamp is NOT reset here to preserve historical data for AI context
+          };
+        }
+        setUserProfile(finalProfile);
       } else {
         setUserProfile(prev => ({ ...initialDefaultUserProfile, email: currentSession.user.email || '' }));
       }
@@ -276,7 +310,6 @@ const App: React.FC = () => {
 
     } catch (error) { console.error("Error loading user-specific data from localStorage:", error); }
     
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentSession, isGuestSession, authLoading]); 
   
   useEffect(() => {
@@ -320,14 +353,13 @@ const App: React.FC = () => {
     setActiveTab('chat');
   }, []);
 
-  const handleProfileUpdate = useCallback(async (updatedProfileFromEditor: UserProfile, isMainUpdate: boolean) => {
+  const handleProfileUpdate = useCallback(async (updatedProfileFromEditor: UserProfile) => {
     if (isGuestSession || !currentSession?.user?.id) {
       setError("Debes iniciar sesión para guardar tu perfil.");
       setTimeout(() => setError(null), 5000);
       return;
     }
     const userId = currentSession.user.id;
-    const oldProfile = userProfile; 
     let profileToSave = { ...updatedProfileFromEditor };
 
     if (!profileToSave.email && currentSession.user.email) {
@@ -340,31 +372,17 @@ const App: React.FC = () => {
      profileToSave.customSportsDiscipline = (profileToSave.sportsDiscipline === SportsDiscipline.Other && profileToSave.customSportsDiscipline) 
                                             ? profileToSave.customSportsDiscipline 
                                             : '';
+    
+    // Preserve check-in data from current state when saving main profile, unless it's being reset
+    const todayCheckInStillValid = !isTimestampFromPreviousDayOrMissing(userProfile.lastCheckInTimestamp);
+    profileToSave.moodToday = todayCheckInStillValid ? userProfile.moodToday : '';
+    profileToSave.trainedToday = todayCheckInStillValid ? userProfile.trainedToday : '';
+    profileToSave.hadBreakfast = todayCheckInStillValid ? userProfile.hadBreakfast : '';
+    profileToSave.energyLevel = todayCheckInStillValid ? userProfile.energyLevel : '';
+    profileToSave.sleepHours = todayCheckInStillValid ? userProfile.sleepHours : '';
+    profileToSave.sleepQuality = todayCheckInStillValid ? userProfile.sleepQuality : "";
+    profileToSave.lastCheckInTimestamp = todayCheckInStillValid ? userProfile.lastCheckInTimestamp : undefined;
 
-    if (isMainUpdate) {
-        profileToSave.lastCheckInTimestamp = oldProfile.lastCheckInTimestamp; 
-    } else { 
-        let dailyCheckInFieldsActuallyModified = false;
-        if (profileToSave.moodToday !== oldProfile.moodToday ||
-            profileToSave.trainedToday !== oldProfile.trainedToday ||
-            profileToSave.hadBreakfast !== oldProfile.hadBreakfast ||
-            profileToSave.energyLevel !== oldProfile.energyLevel ||
-            profileToSave.sleepHours !== oldProfile.sleepHours || 
-            profileToSave.sleepQuality !== oldProfile.sleepQuality
-           ) {
-              dailyCheckInFieldsActuallyModified = true;
-        }
-        
-        if (dailyCheckInFieldsActuallyModified) {
-            if (profileToSave.moodToday || profileToSave.trainedToday || profileToSave.hadBreakfast || profileToSave.energyLevel || profileToSave.sleepHours || profileToSave.sleepQuality) {
-                profileToSave.lastCheckInTimestamp = Date.now();
-            } else { 
-                profileToSave.lastCheckInTimestamp = undefined; 
-            }
-        } else {
-            profileToSave.lastCheckInTimestamp = oldProfile.lastCheckInTimestamp;
-        }
-    }
 
     setUserProfile(profileToSave); 
     setError(null); 
@@ -380,94 +398,124 @@ const App: React.FC = () => {
       setTimeout(() => setError(null), 7000);
     }
     
-    if (isMainUpdate) {
-        let bmr: number | null = null;
-        let tdee: number | null = null;
-        let activityLevelName = "No especificado";
-        let activityFactor = 1.2; 
-        const ageNum = parseInt(profileToSave.age);
-        const weightNum = parseFloat(profileToSave.weight);
-        const heightNum = parseInt(profileToSave.height);
-        let calculationMessage = `¡Perfil de ${profileToSave.name || 'usuario'} actualizado! 🎉\n\n`;
+    // BMR/TDEE Calculation logic for main profile update
+    let bmr: number | null = null;
+    let tdee: number | null = null;
+    let activityLevelName = "No especificado";
+    let activityFactor = 1.2; 
+    const ageNum = parseInt(profileToSave.age);
+    const weightNum = parseFloat(profileToSave.weight);
+    const heightNum = parseInt(profileToSave.height);
+    let calculationMessage = `¡Perfil de ${profileToSave.name || 'usuario'} actualizado! 🎉\n\n`;
 
-        if (isNaN(ageNum) || isNaN(weightNum) || isNaN(heightNum) || ageNum <= 0 || weightNum <= 0 || heightNum <= 0) {
-        calculationMessage += "Por favor, completa tu edad, peso y altura con valores válidos para calcular tus necesidades energéticas. 🙏\n\n";
-        setCurrentBMR(null); setCurrentTDEE(null); setNutrientTargets(initialDefaultNutrientTargets);
-        } else if (heightNum < 60) { 
-        calculationMessage += "**¡Atención Especial por Estatura!** 📏\n";
-        calculationMessage += "Debido a que la estatura ingresada es menor a 60 cm, los cálculos estándar de requerimientos calóricos pueden no ser precisos y no se realizarán. Te recomiendo consultar a un profesional de la salud o nutricionista para obtener una evaluación adecuada, especialmente si esta estatura es correcta. Si fue un error, por favor, corrígela en tu perfil.\n\n";
-        setCurrentBMR(null); setCurrentTDEE(null); setNutrientTargets(initialDefaultNutrientTargets);
-        } else if (ageNum < 18) { 
-            calculationMessage += `Aquí tienes un resumen de tus necesidades estimadas:\n`;
-            if (profileToSave.gender === Gender.Male) bmr = (10 * weightNum) + (6.25 * heightNum) - (5 * ageNum) + 5;
-            else if (profileToSave.gender === Gender.Female) bmr = (10 * weightNum) + (6.25 * heightNum) - (5 * ageNum) - 161;
-            
-            if (bmr && bmr > 0) {
-                if (profileToSave.isAthlete) activityFactor = 1.5; 
-                else activityFactor = 1.4; 
-                tdee = bmr * activityFactor;
-            }
-            calculationMessage += `*   **Metabolismo Basal (MB) Estimado:** ${bmr && bmr > 0 ? bmr.toFixed(0) : 'N/A'} kcal/día 🔥\n`;
-            calculationMessage += `*   **Requerimiento Calórico Total Estimado (RCTE):** ${tdee && tdee > 0 ? tdee.toFixed(0) : 'N/A'} kcal/día 🎯\n\n`;
-            calculationMessage += "**¡Atención Especial por Edad!** 🧑‍⚕️\n";
-            calculationMessage += "Dado que eres menor de 18 años, es CRUCIAL que cualquier plan nutricional o cambio significativo en tu dieta o ejercicio sea supervisado de cerca por tus padres o tutores y un profesional de la salud (médico o nutricionista pediátrico/deportivo). Mis cálculos son solo estimaciones generales y no deben reemplazar el consejo profesional personalizado. ¡Tu salud y desarrollo son lo más importante!\n\n";
-            setCurrentBMR(bmr); setCurrentTDEE(tdee);
-            const targets = calculateMacronutrientTargets(profileToSave, tdee);
-            setNutrientTargets(targets);
-            if (targets.calories && targets.protein && targets.carbs && targets.fats) {
-                calculationMessage += `Tus objetivos aproximados de macronutrientes diarios (que deben ser validados y ajustados por un profesional) podrían ser: Proteína: ${targets.protein.toFixed(0)}g, Carbohidratos: ${targets.carbs.toFixed(0)}g, Grasas: ${targets.fats.toFixed(0)}g.\n\n`;
-            }
-        } else if (profileToSave.gender === Gender.Male || profileToSave.gender === Gender.Female) {
+    if (isNaN(ageNum) || isNaN(weightNum) || isNaN(heightNum) || ageNum <= 0 || weightNum <= 0 || heightNum <= 0) {
+    calculationMessage += "Por favor, completa tu edad, peso y altura con valores válidos para calcular tus necesidades energéticas. 🙏\n\n";
+    setCurrentBMR(null); setCurrentTDEE(null); setNutrientTargets(initialDefaultNutrientTargets);
+    } else if (heightNum < 60) { 
+    calculationMessage += "**¡Atención Especial por Estatura!** 📏\n";
+    calculationMessage += "Debido a que la estatura ingresada es menor a 60 cm, los cálculos estándar de requerimientos calóricos pueden no ser precisos y no se realizarán. Te recomiendo consultar a un profesional de la salud o nutricionista para obtener una evaluación adecuada, especialmente si esta estatura es correcta. Si fue un error, por favor, corrígela en tu perfil.\n\n";
+    setCurrentBMR(null); setCurrentTDEE(null); setNutrientTargets(initialDefaultNutrientTargets);
+    } else if (ageNum < 18) { 
+        calculationMessage += `Aquí tienes un resumen de tus necesidades estimadas:\n`;
         if (profileToSave.gender === Gender.Male) bmr = (10 * weightNum) + (6.25 * heightNum) - (5 * ageNum) + 5;
-        else bmr = (10 * weightNum) + (6.25 * heightNum) - (5 * ageNum) - 161;
-
-        if (profileToSave.isAthlete && profileToSave.trainingLoad) {
-            switch (profileToSave.trainingLoad) { 
-            case TrainingLoad.RestDay: activityFactor = 1.2; activityLevelName = "Día de Descanso 😴"; break;
-            case TrainingLoad.LightTraining: activityFactor = 1.375; activityLevelName = "Entrenamiento Ligero 👟"; break;
-            case TrainingLoad.ModerateTraining: activityFactor = 1.55; activityLevelName = "Entrenamiento Moderado 💪"; break;
-            case TrainingLoad.IntenseTraining: activityFactor = 1.725; activityLevelName = "Entrenamiento Intenso 🔥"; break;
-            case TrainingLoad.MatchDay: activityFactor = 1.9; activityLevelName = "Día de Partido 🏆"; break;
-            default: activityFactor = 1.55; activityLevelName = "Actividad Moderada (Atleta)"; 
-            }
-        } else if (!profileToSave.isAthlete && profileToSave.trainingFrequency) { 
-            switch (profileToSave.trainingFrequency) {
-                case TrainingFrequency.NoneOrRarely: activityFactor = 1.2; activityLevelName = "Sedentario (poco o ningún ejercicio) 🛋️"; break;
-                case TrainingFrequency.TwoToThree: activityFactor = 1.375; activityLevelName = "Ejercicio Ligero (2-3 días/sem) 🚶"; break;
-                case TrainingFrequency.FourTimes: activityFactor = 1.4625; activityLevelName = "Ejercicio Moderado (4 días/sem) 🏃"; break; 
-                case TrainingFrequency.FiveToSix: activityFactor = 1.55; activityLevelName = "Ejercicio Moderado (5-6 días/sem) 🏋️"; break;
-                case TrainingFrequency.DailyOrMore: activityFactor = 1.725; activityLevelName = "Ejercicio Intenso (diario o más) ⚡"; break;
-                default: activityFactor = 1.375; activityLevelName = "Actividad Ligera (No Atleta)"; 
-            }
-        }
-
-        if (bmr && bmr > 0) {
-            tdee = bmr * activityFactor;
-            calculationMessage += `Aquí tienes un resumen de tus necesidades estimadas, basado en tu actividad como ${activityLevelName.toLowerCase()}:\n`;
-            calculationMessage += `*   **Metabolismo Basal (MB) Estimado:** ${bmr.toFixed(0)} kcal/día 🔥\n`;
-            calculationMessage += `*   **Requerimiento Calórico Total Estimado (RCTE):** ${tdee.toFixed(0)} kcal/día 🎯\n\n`;
-            setCurrentBMR(bmr); setCurrentTDEE(tdee);
-
-            const targets = calculateMacronutrientTargets(profileToSave, tdee);
-            setNutrientTargets(targets);
-            if (targets.calories && targets.protein && targets.carbs && targets.fats) {
-                calculationMessage += `Tus objetivos aproximados de macronutrientes diarios son: Proteína: ${targets.protein.toFixed(0)}g, Carbohidratos: ${targets.carbs.toFixed(0)}g, Grasas: ${targets.fats.toFixed(0)}g.\n\n`;
-            }
-        } else {
-            calculationMessage += "No se pudo calcular el MB con los datos proporcionados.\n\n";
-            setCurrentBMR(null); setCurrentTDEE(null); setNutrientTargets(initialDefaultNutrientTargets);
-        }
-        calculationMessage += `\nTe recomiendo que un profesional valide estos números y te ayude a crear un plan específico. Estoy aquí para darte ideas generales. ¿Qué te gustaría explorar ahora?`;
-        } 
+        else if (profileToSave.gender === Gender.Female) bmr = (10 * weightNum) + (6.25 * heightNum) - (5 * ageNum) - 161;
         
-        if (calculationMessage.trim() !== `¡Perfil de ${profileToSave.name || 'usuario'} actualizado! 🎉\n\n`.trim()) {
-            setMessages(prev => [...prev, { id: crypto.randomUUID(), sender: 'ai', text: calculationMessage, timestamp: new Date(), feedback: null }]);
+        if (bmr && bmr > 0) {
+            if (profileToSave.isAthlete) activityFactor = 1.5; 
+            else activityFactor = 1.4; 
+            tdee = bmr * activityFactor;
+        }
+        calculationMessage += `*   **Metabolismo Basal (MB) Estimado:** ${bmr && bmr > 0 ? bmr.toFixed(0) : 'N/A'} kcal/día 🔥\n`;
+        calculationMessage += `*   **Requerimiento Calórico Total Estimado (RCTE):** ${tdee && tdee > 0 ? tdee.toFixed(0) : 'N/A'} kcal/día 🎯\n\n`;
+        calculationMessage += "**¡Atención Especial por Edad!** 🧑‍⚕️\n";
+        calculationMessage += "Dado que eres menor de 18 años, es CRUCIAL que cualquier plan nutricional o cambio significativo en tu dieta o ejercicio sea supervisado de cerca por tus padres o tutores y un profesional de la salud (médico o nutricionista pediátrico/deportivo). Mis cálculos son solo estimaciones generales y no deben reemplazar el consejo profesional personalizado. ¡Tu salud y desarrollo son lo más importante!\n\n";
+        setCurrentBMR(bmr); setCurrentTDEE(tdee);
+        const targets = calculateMacronutrientTargets(profileToSave, tdee);
+        setNutrientTargets(targets);
+        if (targets.calories && targets.protein && targets.carbs && targets.fats) {
+            calculationMessage += `Tus objetivos aproximados de macronutrientes diarios (que deben ser validados y ajustados por un profesional) podrían ser: Proteína: ${targets.protein.toFixed(0)}g, Carbohidratos: ${targets.carbs.toFixed(0)}g, Grasas: ${targets.fats.toFixed(0)}g.\n\n`;
+        }
+    } else if (profileToSave.gender === Gender.Male || profileToSave.gender === Gender.Female) {
+    if (profileToSave.gender === Gender.Male) bmr = (10 * weightNum) + (6.25 * heightNum) - (5 * ageNum) + 5;
+    else bmr = (10 * weightNum) + (6.25 * heightNum) - (5 * ageNum) - 161;
+
+    if (profileToSave.isAthlete && profileToSave.trainingLoad) {
+        switch (profileToSave.trainingLoad) { 
+        case TrainingLoad.RestDay: activityFactor = 1.2; activityLevelName = "Día de Descanso 😴"; break;
+        case TrainingLoad.LightTraining: activityFactor = 1.375; activityLevelName = "Entrenamiento Ligero 👟"; break;
+        case TrainingLoad.ModerateTraining: activityFactor = 1.55; activityLevelName = "Entrenamiento Moderado 💪"; break;
+        case TrainingLoad.IntenseTraining: activityFactor = 1.725; activityLevelName = "Entrenamiento Intenso 🔥"; break;
+        case TrainingLoad.MatchDay: activityFactor = 1.9; activityLevelName = "Día de Partido 🏆"; break;
+        default: activityFactor = 1.55; activityLevelName = "Actividad Moderada (Atleta)"; 
+        }
+    } else if (!profileToSave.isAthlete && profileToSave.trainingFrequency) { 
+        switch (profileToSave.trainingFrequency) {
+            case TrainingFrequency.NoneOrRarely: activityFactor = 1.2; activityLevelName = "Sedentario (poco o ningún ejercicio) 🛋️"; break;
+            case TrainingFrequency.TwoToThree: activityFactor = 1.375; activityLevelName = "Ejercicio Ligero (2-3 días/sem) 🚶"; break;
+            case TrainingFrequency.FourTimes: activityFactor = 1.4625; activityLevelName = "Ejercicio Moderado (4 días/sem) 🏃"; break; 
+            case TrainingFrequency.FiveToSix: activityFactor = 1.55; activityLevelName = "Ejercicio Moderado (5-6 días/sem) 🏋️"; break;
+            case TrainingFrequency.DailyOrMore: activityFactor = 1.725; activityLevelName = "Ejercicio Intenso (diario o más) ⚡"; break;
+            default: activityFactor = 1.375; activityLevelName = "Actividad Ligera (No Atleta)"; 
         }
     }
-  }, [userProfile, currentSession, isGuestSession, handleProfileEditingComplete]); // Added handleProfileEditingComplete
+
+    if (bmr && bmr > 0) {
+        tdee = bmr * activityFactor;
+        calculationMessage += `Aquí tienes un resumen de tus necesidades estimadas, basado en tu actividad como ${activityLevelName.toLowerCase()}:\n`;
+        calculationMessage += `*   **Metabolismo Basal (MB) Estimado:** ${bmr.toFixed(0)} kcal/día 🔥\n`;
+        calculationMessage += `*   **Requerimiento Calórico Total Estimado (RCTE):** ${tdee.toFixed(0)} kcal/día 🎯\n\n`;
+        setCurrentBMR(bmr); setCurrentTDEE(tdee);
+
+        const targets = calculateMacronutrientTargets(profileToSave, tdee);
+        setNutrientTargets(targets);
+        if (targets.calories && targets.protein && targets.carbs && targets.fats) {
+            calculationMessage += `Tus objetivos aproximados de macronutrientes diarios son: Proteína: ${targets.protein.toFixed(0)}g, Carbohidratos: ${targets.carbs.toFixed(0)}g, Grasas: ${targets.fats.toFixed(0)}g.\n\n`;
+        }
+    } else {
+        calculationMessage += "No se pudo calcular el MB con los datos proporcionados.\n\n";
+        setCurrentBMR(null); setCurrentTDEE(null); setNutrientTargets(initialDefaultNutrientTargets);
+    }
+    calculationMessage += `\nTe recomiendo que un profesional valide estos números y te ayude a crear un plan específico. Estoy aquí para darte ideas generales. ¿Qué te gustaría explorar ahora?`;
+    } 
+    
+    if (calculationMessage.trim() !== `¡Perfil de ${profileToSave.name || 'usuario'} actualizado! 🎉\n\n`.trim()) {
+        setMessages(prev => [...prev, { id: crypto.randomUUID(), sender: 'ai', text: calculationMessage, timestamp: new Date(), feedback: null }]);
+    }
+    handleProfileEditingComplete();
+  }, [userProfile, currentSession, isGuestSession, handleProfileEditingComplete]);
+
+  const handleSaveCheckIn = useCallback(async (checkInData: Partial<UserProfile>) => {
+    if (isGuestSession || !currentSession?.user?.id) {
+      setError("Debes iniciar sesión para guardar tu check-in.");
+      setTimeout(() => setError(null), 5000);
+      return;
+    }
+    const userId = currentSession.user.id;
+    
+    const updatedProfileWithCheckIn = {
+      ...userProfile,
+      ...checkInData,
+      lastCheckInTimestamp: Date.now(),
+    };
+
+    setUserProfile(updatedProfileWithCheckIn); // UI updates immediately
+    setError(null);
+
+    try {
+      await saveUserProfileToSupabase(updatedProfileWithCheckIn, userId);
+      setSuccessMessage("Check-in guardado con éxito. 👍");
+      setTimeout(() => setSuccessMessage(null), 3000);
+      // setActiveTab('chat'); // Optionally navigate to chat
+    } catch (dbError) {
+      console.error("Failed to save check-in to Supabase:", dbError);
+      const message = dbError instanceof Error ? dbError.message : "Error desconocido al guardar check-in.";
+      setError(`Error al guardar check-in: ${message}.`);
+      setTimeout(() => setError(null), 7000);
+    }
+  }, [userProfile, currentSession, isGuestSession]);
   
 
-  const handleClearLocalStorage = () => {
+  const handleClearLocalStorage = () => { // This function is no longer called from UI but kept for potential future use or direct call
     if (confirm("¿Estás seguro de que quieres borrar tu historial de chat y registro de comidas de este navegador? Tu perfil guardado en la nube no se verá afectado.")) {
       if (isGuestSession) {
           localStorage.removeItem(GUEST_CHAT_MESSAGES_STORAGE_KEY);
@@ -772,101 +820,212 @@ const App: React.FC = () => {
     }
   }, [isRecording, userProfile, dailyIntake, nutrientTargets, currentBMR, currentTDEE, isGuestSession, currentSession]);
 
-  const openCamera = async () => {
+  const openCamera = () => {
+    console.log("Camera: Request to open camera.");
     setCameraError(null);
-    if (isGuestSession) {
-        setCameraError("Debes iniciar sesión para usar la cámara.");
-        return;
-    }
-    try {
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        setCameraError("Tu navegador no soporta el acceso a la cámara. Prueba con otro.");
-        return;
-      }
-      const stream = await navigator.mediaDevices.getUserMedia({ 
-        video: { 
-          facingMode: "environment", 
-          width: { ideal: 1280 }, 
-          height: { ideal: 720 } 
-        } 
-      });
-      videoStreamRef.current = stream;
-      if (videoElementRef.current) {
-        videoElementRef.current.srcObject = stream;
-        videoElementRef.current.onloadedmetadata = () => {
-            if (videoElementRef.current && canvasElementRef.current) {
-                canvasElementRef.current.width = videoElementRef.current.videoWidth;
-                canvasElementRef.current.height = videoElementRef.current.videoHeight;
-            }
-        };
-      }
-      setIsCameraOpen(true);
-    } catch (err) {
-      console.error("Error accessing camera:", err);
-      let message = "No se pudo acceder a la cámara.";
-       if (err instanceof Error) {
-            if (err.name === "NotAllowedError") message = "Permiso para cámara denegado. Habilítalo en los ajustes de tu navegador.";
-            else if (err.name === "NotFoundError") message = "No se encontró una cámara disponible.";
-            else if (err.name === "NotReadableError") message = "La cámara está siendo usada por otra aplicación o hubo un error de hardware.";
-            else if (err.name === "OverconstrainedError") message = `No se pudo satisfacer la configuración de cámara solicitada (ej. facingMode). ${err.message}`;
-            else message = `Error de cámara: ${err.message}`;
-        }
-      setCameraError(message);
-      closeCamera();
-    }
+    setCameraStatusMessage("Abriendo dispositivo...");
+    setIsVideoStreamReady(false);
+    setIsCameraOpen(true); // This will trigger the modal to render and useEffect to run
   };
 
+  useEffect(() => {
+    if (isCameraOpen) {
+      console.log("Camera: useEffect for camera setup triggered. isCameraOpen:", isCameraOpen);
+      
+      if (!videoElementRef.current || !canvasElementRef.current) {
+        console.error("Camera: useEffect - Video or Canvas element ref is NOT available. Modal might not be rendered yet.");
+        setCameraError("Error crítico: Elementos de la cámara no disponibles. Por favor, cierra e intenta de nuevo.");
+        return; 
+      }
+
+      const videoNode = videoElementRef.current;
+      const canvasNode = canvasElementRef.current;
+      let localStream: MediaStream | null = null; 
+
+      const setupStream = async () => {
+        try {
+          if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            setCameraError("Tu navegador no soporta el acceso a la cámara.");
+            setCameraStatusMessage("");
+            console.error("Camera: getUserMedia not supported.");
+            return;
+          }
+          console.log("Camera: Requesting user media in useEffect...");
+          const stream = await navigator.mediaDevices.getUserMedia({
+            video: {
+              facingMode: "environment",
+              width: { ideal: 1280 },
+              height: { ideal: 720 }
+            }
+          });
+          
+          localStream = stream;
+          videoStreamRef.current = stream; 
+          
+          console.log("Camera: Stream obtained in useEffect.", stream);
+          videoNode.srcObject = stream;
+          console.log("Camera: srcObject set on video element in useEffect.");
+          setCameraStatusMessage("Configurando video...");
+
+          videoNode.onloadedmetadata = () => {
+            console.log("Camera: onloadedmetadata event fired.");
+            if (videoNode.videoWidth > 0 && videoNode.videoHeight > 0) {
+              canvasNode.width = videoNode.videoWidth;
+              canvasNode.height = videoNode.videoHeight;
+              console.log(`Camera: Canvas dimensions set to ${videoNode.videoWidth}x${videoNode.videoHeight}.`);
+              setCameraStatusMessage("Video cargado, intentando reproducir...");
+            } else {
+              console.warn("Camera: onloadedmetadata - Video dimensions are 0.");
+              setCameraStatusMessage("Esperando dimensiones del video...");
+            }
+          };
+
+          videoNode.onplaying = () => {
+            console.log("Camera: onplaying event fired. Video is now playing.");
+            setCameraError(null);
+            setIsVideoStreamReady(true);
+            setCameraStatusMessage("Cámara lista.");
+          };
+
+          videoNode.onerror = (e) => {
+            console.error("Camera: Video element error event:", e);
+            setCameraError("Error en el elemento de video de la cámara. Intenta de nuevo.");
+            setIsVideoStreamReady(false);
+            setCameraStatusMessage("");
+          };
+          
+          videoNode.onstalled = () => {
+              console.warn("Camera: Video stalled event fired. Stream may have issues.");
+              setCameraError("La transmisión de la cámara se detuvo o es inestable. Intenta de nuevo.");
+              setIsVideoStreamReady(false);
+              setCameraStatusMessage("");
+          };
+
+          console.log("Camera: Attempting to play video in useEffect...");
+          await videoNode.play();
+          console.log("Camera: video.play() promise resolved successfully in useEffect.");
+
+        } catch (err) {
+          console.error("Camera: Error in useEffect stream setup:", err);
+          let message = "No se pudo acceder a la cámara.";
+          if (err instanceof Error) {
+            if (err.name === "NotAllowedError") message = `Permiso para cámara denegado. Habilítalo en los ajustes.`;
+            else if (err.name === "NotFoundError") message = `No se encontró una cámara disponible.`;
+            else if (err.name === "NotReadableError") message = `La cámara está siendo usada o hubo un error de hardware.`;
+            else if (err.name === "OverconstrainedError") message = `La configuración solicitada para la cámara no es soportada por tu dispositivo.`;
+            else message = `Error de cámara: ${err.name}`;
+          }
+          setCameraError(message);
+          setIsVideoStreamReady(false);
+          setCameraStatusMessage("");
+        }
+      };
+
+      setupStream();
+
+      return () => {
+        console.log("Camera: useEffect cleanup function running (isCameraOpen was true).");
+        if (localStream) {
+          console.log("Camera: useEffect cleanup stopping tracks from localStream.");
+          localStream.getTracks().forEach(track => track.stop());
+        }
+        if (videoNode) {
+            videoNode.srcObject = null;
+            videoNode.onloadedmetadata = null;
+            videoNode.onplaying = null;
+            videoNode.onerror = null;
+            videoNode.onstalled = null;
+        }
+        // videoStreamRef.current is cleared by closeCamera if it's the one triggering the close.
+        // If the component unmounts, this ensures the ref doesn't hold a dead stream.
+        if (videoStreamRef.current && videoStreamRef.current === localStream) {
+            videoStreamRef.current = null;
+        }
+      };
+    }
+  }, [isCameraOpen]);
+
+
   const closeCamera = () => {
+    console.log("Camera: closeCamera called.");
     if (videoStreamRef.current) {
-      videoStreamRef.current.getTracks().forEach(track => track.stop());
+      videoStreamRef.current.getTracks().forEach(track => {
+        console.log(`Camera: Stopping track: ${track.label}`);
+        track.stop();
+      });
       videoStreamRef.current = null;
     }
     if (videoElementRef.current) {
         videoElementRef.current.srcObject = null;
+        videoElementRef.current.onloadedmetadata = null;
+        videoElementRef.current.onplaying = null;
+        videoElementRef.current.onerror = null;
+        videoElementRef.current.onstalled = null;
     }
     setIsCameraOpen(false);
+    setIsVideoStreamReady(false);
     setCameraError(null);
+    setCameraStatusMessage("");
+    console.log("Camera: State reset for closed camera.");
   };
 
   const captureImage = async () => {
+    console.log("Camera: captureImage called. isVideoStreamReady:", isVideoStreamReady);
+    if (!isVideoStreamReady) {
+        setCameraError("El stream de video no está listo. Espera a que se inicie completamente.");
+        console.warn("Camera: Capture attempted but video stream not ready.");
+        return;
+    }
     if (!videoElementRef.current || !canvasElementRef.current) {
-      setCameraError("Error interno al capturar imagen.");
+      setCameraError("Error interno al capturar imagen (referencias no disponibles).");
+      console.error("Camera: Capture failed, video or canvas ref missing.");
       return;
     }
     const video = videoElementRef.current;
     const canvas = canvasElementRef.current;
+
+    if (video.readyState < HTMLMediaElement.HAVE_ENOUGH_DATA || video.videoWidth === 0 || video.videoHeight === 0) {
+        setCameraError("El video de la cámara aún no está completamente listo (datos insuficientes) o no tiene dimensiones válidas. Espera e inténtalo de nuevo.");
+        console.warn(`Camera: Capture failed. Video not ready. State: ${video.readyState}, Width: ${video.videoWidth}, Height: ${video.videoHeight}`);
+        return;
+    }
+    
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
+    console.log(`Camera: Canvas dimensions for capture: ${canvas.width}x${canvas.height}`);
 
     const context = canvas.getContext('2d');
     if (!context) {
       setCameraError("No se pudo obtener el contexto del canvas para capturar la imagen.");
+      console.error("Camera: Failed to get 2D context from canvas.");
       return;
     }
     context.drawImage(video, 0, 0, canvas.width, canvas.height);
+    console.log("Camera: Image drawn to canvas.");
     
     let dataUrl = canvas.toDataURL('image/jpeg', 0.85); 
     let mimeType = 'image/jpeg';
 
     if (!dataUrl || dataUrl.length < 1000) { 
-        console.warn("JPEG conversion might have failed or produced a very small image, trying PNG.");
+        console.warn("Camera: JPEG conversion might have failed or produced a very small image, trying PNG.");
         dataUrl = canvas.toDataURL('image/png');
         mimeType = 'image/png';
     }
 
-    if (!dataUrl) {
-        setCameraError("No se pudo convertir la imagen capturada.");
+    if (!dataUrl || dataUrl.length < 100) { 
+        setCameraError("No se pudo convertir la imagen capturada. Inténtalo de nuevo.");
+        console.error("Camera: Failed to generate a valid dataURL from canvas after PNG fallback.");
         return;
     }
+    console.log(`Camera: Image captured as ${mimeType}. DataURL length: ${dataUrl.length}`);
 
-    closeCamera();
+    closeCamera(); 
     const base64Image = dataUrl.split(',')[1];
-    
-    if(chatInputRef.current) {
-    }
     
     const currentTextInInput = chatInputRef.current?.value || "";
     handleSendMessage(currentTextInInput, { base64Data: base64Image, mimeType: mimeType });
+    if(chatInputRef.current) chatInputRef.current.value = ""; 
+    console.log("Camera: Image sent to handleSendMessage.");
   };
   
   const handleAuthAction = async (action: 'signUp' | 'signIn', email: string, pass: string) => {
@@ -961,6 +1120,15 @@ const App: React.FC = () => {
           >
             <ChatIcon className="w-6 h-6" />
           </button>
+           {!isGuestSession && currentSession && (
+             <button
+                onClick={() => setActiveTab('checkin')}
+                className={`p-2 rounded-full transition-colors ${activeTab === 'checkin' ? 'bg-green-600 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-700 hover:text-green-400'}`}
+                aria-label="Check-in Diario" title="Check-in Diario"
+            >
+                <CheckInIcon className="w-6 h-6" />
+            </button>
+           )}
            <button
             onClick={() => setActiveTab('about')}
             className={`p-2 rounded-full transition-colors ${activeTab === 'about' ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-700 hover:text-indigo-400'}`}
@@ -1020,8 +1188,14 @@ const App: React.FC = () => {
                 onUpdateProfile={handleProfileUpdate}
                 onEditingComplete={handleProfileEditingComplete}
                 isActive={activeTab === 'profile'}
-                onClearCache={handleClearLocalStorage}
                 isGuest={isGuestSession} 
+            />
+        )}
+        {activeTab === 'checkin' && !isGuestSession && (
+            <DailyCheckInPanel
+                initialProfile={userProfile}
+                onSaveCheckIn={handleSaveCheckIn}
+                isGuest={isGuestSession}
             />
         )}
         {activeTab === 'admin' && isAdmin && ( 
@@ -1033,7 +1207,7 @@ const App: React.FC = () => {
       </main>
 
       {/* Footer / Disclaimer */}
-      {activeTab === 'chat' && (
+      {(activeTab === 'chat' || activeTab === 'checkin') && (
          <footer className="bg-slate-800 text-center p-2 border-t border-slate-600">
              <p className="text-xs text-slate-500">{DISCLAIMER_TEXT}</p>
          </footer>
@@ -1043,7 +1217,7 @@ const App: React.FC = () => {
           {successMessage}
         </div>
       )}
-      {error && activeTab !== 'chat' && ( 
+      {error && (activeTab === 'profile' || activeTab === 'checkin') && ( 
         <div className="fixed bottom-4 right-4 bg-red-600 text-white py-2 px-4 rounded-lg shadow-md animate-fadeIn z-50">
           {error}
         </div>
@@ -1082,12 +1256,24 @@ const App: React.FC = () => {
           <div className="camera-modal">
             <video ref={videoElementRef} autoPlay playsInline muted className="shadow-lg"></video>
             {cameraError && <p className="camera-error-message">{cameraError}</p>}
+            {cameraStatusMessage && !cameraError && cameraStatusMessage !== "Cámara lista." && (
+                <p className="text-sm text-orange-400 my-2">{cameraStatusMessage}</p>
+            )}
             <div className="camera-buttons">
-              <button onClick={captureImage} className="camera-capture-button" disabled={!!cameraError}>Capturar Foto 📸</button>
+              <button 
+                onClick={captureImage} 
+                className="camera-capture-button"
+                disabled={!isVideoStreamReady || isGuestSession}
+              >
+                Capturar Foto 📸
+              </button>
               <button onClick={closeCamera} className="camera-cancel-button">Cancelar</button>
             </div>
             <canvas ref={canvasElementRef} style={{ display: 'none' }}></canvas>
-             <p className="text-xs text-slate-400 mt-3 text-center">Apunta a tu comida o etiqueta nutricional.</p>
+             <p className="text-xs text-slate-400 mt-3 text-center">
+                {isGuestSession ? "Regístrate para analizar imágenes de comida." : 
+                 (isVideoStreamReady ? "Apunta a tu comida o etiqueta nutricional." : (cameraStatusMessage || "Esperando que el video esté listo..."))}
+             </p>
           </div>
         </div>
       )}

@@ -1,7 +1,6 @@
 
-
 import { createClient, SupabaseClient, Session as SupabaseAuthSession, User as SupabaseAuthUser } from '@supabase/supabase-js';
-import { UserProfile, SportsDiscipline, DietaryApproachOptions, DietaryRestrictionOptions, SupabaseSession, SupabaseUser, AdminUserView, SleepQualityOptions } from '../types';
+import { UserProfile, SportsDiscipline, DietaryApproachOptions, DietaryRestrictionOptions, SupabaseSession, SupabaseUser, AdminUserView, SleepQualityOptions, Gender, TrainingLoad, TrainingFrequency, PersonalGoal } from '../types'; // Added missing imports
 
 // =====================================================================================
 // Usuario ya ha configurado estas credenciales.
@@ -115,9 +114,9 @@ export const onAuthStateChange = (callback: (session: SupabaseSession | null) =>
 const mapProfileToSupabaseSchema = (profile: UserProfile, userId: string): any => {
   const sportsDisciplineValue = profile.sportsDiscipline || null;
   const profileForSupabase: any = {
-    id: userId, // Use authenticated user ID as the primary key for the profile
+    id: userId, 
     name: profile.name || null,
-    email: profile.email || null, // Could be derived from auth user email or kept separate
+    email: profile.email || null, 
     phone: profile.phone || null,
     age: profile.age || null, 
     weight: profile.weight || null,
@@ -125,7 +124,7 @@ const mapProfileToSupabaseSchema = (profile: UserProfile, userId: string): any =
     gender: profile.gender || null,
     is_athlete: profile.isAthlete || false,
     sports_discipline: profile.isAthlete ? sportsDisciplineValue : null,
-    custom_sports_discipline: null, // This field is primarily for UI, actual value stored in sports_discipline
+    custom_sports_discipline: null, 
     position: profile.isAthlete ? (profile.position || null) : null,
     training_load: profile.isAthlete ? (profile.trainingLoad || null) : null,
     athletic_goals: profile.isAthlete && profile.athleticGoals && profile.athleticGoals.length > 0 ? profile.athleticGoals : null,
@@ -149,6 +148,39 @@ const mapProfileToSupabaseSchema = (profile: UserProfile, userId: string): any =
   return profileForSupabase;
 };
 
+const mapSupabaseRowToUserProfile = (data: any): UserProfile => {
+    // This function ensures all fields from UserProfile are present, with defaults if missing from DB
+    return {
+        name: data.name || '',
+        email: data.email || '',
+        phone: data.phone || '',
+        age: data.age || '',
+        weight: data.weight || '',
+        height: data.height || '',
+        gender: (data.gender as Gender) || "", // Cast and provide default
+        isAthlete: data.is_athlete || false,
+        sportsDiscipline: data.sports_discipline || undefined,
+        customSportsDiscipline: '', // UI only, not stored directly. If sports_discipline IS 'Otro', then custom value is in sports_discipline
+        position: data.position || '',
+        trainingLoad: (data.training_load as TrainingLoad) || undefined, // Cast and provide default
+        athleticGoals: data.athletic_goals || [],
+        trainingFrequency: (data.training_frequency as TrainingFrequency) || undefined, // Cast and provide default
+        goals: (data.goals as PersonalGoal) || "", // Cast and provide default
+        dietaryApproaches: data.dietary_approaches || [],
+        dietaryRestrictions: data.dietary_restrictions || [],
+        currentSupplementUsage: (data.current_supplement_usage as "Sí" | "No" | "Prefiero no decirlo") || "Prefiero no decirlo",
+        supplementInterestOrUsageDetails: data.supplement_interest_or_usage_details || '',
+        wellnessFocusAreas: data.wellness_focus_areas || [],
+        moodToday: data.mood_today || '',
+        trainedToday: data.trained_today || '',
+        hadBreakfast: data.had_breakfast || '',
+        energyLevel: data.energy_level || '',
+        sleepHours: data.sleep_hours || '', 
+        sleepQuality: (data.sleep_quality as SleepQualityOptions | undefined) || "", 
+        lastCheckInTimestamp: data.last_check_in_timestamp ? new Date(data.last_check_in_timestamp).getTime() : undefined,
+    };
+};
+
 export const saveUserProfileToSupabase = async (userProfile: UserProfile, userId: string): Promise<void> => {
   const status = getSupabaseClientStatus();
   if (!status.clientInitialized || !supabase) {
@@ -162,7 +194,6 @@ export const saveUserProfileToSupabase = async (userProfile: UserProfile, userId
   const profileDataForSupabase = mapProfileToSupabaseSchema(userProfile, userId);
 
   try {
-    // Upsert ensures that if a profile with this ID exists, it's updated; otherwise, it's created.
     const { data, error } = await supabase
       .from('user_profiles') 
       .upsert(profileDataForSupabase, { onConflict: 'id' }) 
@@ -207,49 +238,16 @@ export const loadUserProfileFromSupabase = async (userId: string): Promise<UserP
       .from('user_profiles')
       .select('*')
       .eq('id', userId)
-      .single(); // Expecting only one profile per user ID
+      .single(); 
 
-    if (error && error.code !== 'PGRST116') { // PGRST116: 'Fetched single row; but zero rows returned' (not an error for new users)
+    if (error && error.code !== 'PGRST116') { 
       console.error("Error loading user profile from Supabase:", error);
       throw error;
     }
     if (data) {
-      // Map Supabase snake_case to UserProfile camelCase if necessary (already handled in mapProfileToSupabaseSchema, ensure consistency)
-      // For now, assume direct mapping or that Supabase returns fields as defined in mapProfileToSupabaseSchema output
-      const loadedProfile = { ...data } as any; // Cast for type safety
-      // Ensure all fields from UserProfile are present, with defaults if missing from DB
-      const completeProfile: UserProfile = {
-          name: loadedProfile.name || '',
-          email: loadedProfile.email || '',
-          phone: loadedProfile.phone || '',
-          age: loadedProfile.age || '',
-          weight: loadedProfile.weight || '',
-          height: loadedProfile.height || '',
-          gender: (loadedProfile.gender as any) || "",
-          isAthlete: loadedProfile.is_athlete || false,
-          sportsDiscipline: loadedProfile.sports_discipline || undefined,
-          customSportsDiscipline: '', // UI only, not stored directly
-          position: loadedProfile.position || '',
-          trainingLoad: (loadedProfile.training_load as any) || undefined,
-          athleticGoals: loadedProfile.athletic_goals || [],
-          trainingFrequency: (loadedProfile.training_frequency as any) || undefined,
-          goals: (loadedProfile.goals as any) || "",
-          dietaryApproaches: loadedProfile.dietary_approaches || [],
-          dietaryRestrictions: loadedProfile.dietary_restrictions || [],
-          currentSupplementUsage: (loadedProfile.current_supplement_usage as any) || "Prefiero no decirlo",
-          supplementInterestOrUsageDetails: loadedProfile.supplement_interest_or_usage_details || '',
-          wellnessFocusAreas: loadedProfile.wellness_focus_areas || [],
-          moodToday: loadedProfile.mood_today || '',
-          trainedToday: loadedProfile.trained_today || '',
-          hadBreakfast: loadedProfile.had_breakfast || '',
-          energyLevel: loadedProfile.energy_level || '',
-          sleepHours: loadedProfile.sleep_hours || '', 
-          sleepQuality: (loadedProfile.sleep_quality as SleepQualityOptions | undefined) || "", 
-          lastCheckInTimestamp: loadedProfile.last_check_in_timestamp ? new Date(loadedProfile.last_check_in_timestamp).getTime() : undefined,
-      };
-      return completeProfile;
+      return mapSupabaseRowToUserProfile(data);
     }
-    return null; // No profile found for this user
+    return null; 
   } catch (error) {
     console.error("Exception loading user profile:", error);
     return null;
@@ -258,12 +256,7 @@ export const loadUserProfileFromSupabase = async (userId: string): Promise<UserP
 
 
 // --- Admin Functions ---
-/**
- * Fetches basic information for all user profiles. Intended for admin use.
- * IMPORTANT: This function itself does not enforce admin-only access.
- * The calling code (frontend) MUST ensure only admins can trigger this.
- * For production, use Supabase RLS or Edge Functions for proper access control.
- */
+
 export const fetchAllUserProfilesForAdmin = async (): Promise<AdminUserView[]> => {
   const status = getSupabaseClientStatus();
   if (!status.clientInitialized || !supabase) {
@@ -274,35 +267,74 @@ export const fetchAllUserProfilesForAdmin = async (): Promise<AdminUserView[]> =
   try {
     const { data, error } = await supabase
       .from('user_profiles')
-      .select('id, name, email, last_updated_at, is_athlete, gender, goals, age') // Added new fields
-      .order('last_updated_at', { ascending: false });
-
+      .select('id, name, email, last_updated_at, is_athlete, gender, goals, age'); 
+    
     if (error) {
-      console.error("Error fetching all user profiles from Supabase for admin:", error);
-      // It's crucial to check for RLS errors here specifically for admins.
-      // If RLS prevents a global read, this will fail.
-      if (error.message.includes("security policy") || (error.details && error.details.includes("security policy"))) {
-          throw new Error("Error de permisos (RLS): El administrador no tiene permiso para leer todos los perfiles. Verifica las políticas de RLS para la tabla 'user_profiles' en Supabase.");
-      }
+      console.error("Error fetching all user profiles for admin:", error);
       throw error;
     }
-
-    return (data || []).map(profile => ({
-      id: profile.id,
-      name: profile.name,
-      email: profile.email,
-      last_updated_at: profile.last_updated_at ? new Date(profile.last_updated_at).toLocaleString() : 'N/A',
-      is_athlete: profile.is_athlete, // is_athlete is boolean in DB
-      gender: profile.gender,
-      goals: profile.goals,
-      age: profile.age, // age is stored as string/text
-    }));
-  } catch (error: any) {
+    return data || [];
+  } catch (error) {
     console.error("Exception fetching all user profiles for admin:", error);
-    let UImessage = "Ocurrió un error al obtener la lista de usuarios para el administrador.";
-    if (error.message) {
-        UImessage = error.message; // Propagate specific RLS or other errors
+    throw error;
+  }
+};
+
+export const fetchUserProfileForAdmin = async (userId: string): Promise<UserProfile | null> => {
+  const status = getSupabaseClientStatus();
+  if (!status.clientInitialized || !supabase) {
+    console.warn("Supabase client not initialized. Cannot load profile for admin.");
+    return null;
+  }
+  if (!userId) {
+    console.warn("User ID is required to load a profile for admin.");
+    return null;
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from('user_profiles')
+      .select('*')
+      .eq('id', userId)
+      .single();
+
+    if (error && error.code !== 'PGRST116') {
+      console.error(`Error loading user profile (id: ${userId}) for admin:`, error);
+      throw error;
     }
-    throw new Error(UImessage);
+    if (data) {
+      return mapSupabaseRowToUserProfile(data);
+    }
+    return null;
+  } catch (error) {
+    console.error(`Exception loading user profile (id: ${userId}) for admin:`, error);
+    return null;
+  }
+};
+
+export const deleteUserProfileForAdmin = async (userId: string): Promise<void> => {
+  const status = getSupabaseClientStatus();
+  if (!status.clientInitialized || !supabase) {
+    const errorMessage = status.detailedMessage || "Cliente Supabase no está inicializado. No se pudo eliminar el perfil.";
+    throw new Error(errorMessage);
+  }
+  if (!userId) {
+    throw new Error("User ID es requerido para eliminar el perfil.");
+  }
+
+  try {
+    const { error } = await supabase
+      .from('user_profiles')
+      .delete()
+      .eq('id', userId);
+
+    if (error) {
+      console.error(`Error deleting user profile (id: ${userId}) for admin:`, error);
+      throw error;
+    }
+    console.log(`User profile (id: ${userId}) deleted successfully by admin.`);
+  } catch (error: any) {
+    console.error(`Exception deleting user profile (id: ${userId}) for admin:`, error);
+    throw new Error(error.message || "Ocurrió un error al eliminar el perfil del usuario.");
   }
 };
