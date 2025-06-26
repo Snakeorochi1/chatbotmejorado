@@ -1,4 +1,5 @@
 
+
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { UserProfile, Message, Gender, SportsDiscipline, TrainingLoad, TrainingFrequency, PersonalGoal, DailyIntake, NutrientTargets, EstimatedFoodIntake, SupabaseSession, AthleticGoalOptions } from './types';
 import { generateNutriKickResponse, GeminiServiceResponse } from './services/geminiService';
@@ -15,17 +16,18 @@ import {
 import { ProfileEditor } from './components/ProfileEditor';
 import { ChatWindow } from './components/ChatWindow';
 import { AuthForm } from './components/AuthForm';
-import { AdminPanel } from './components/AdminPanel'; // Import AdminPanel
-import { DISCLAIMER_TEXT, ADMIN_EMAILS } from './constants'; // Import ADMIN_EMAILS
-import { LogoIcon, ProfileIcon, ChatIcon, LogoutIcon, LoginIcon, CloseIcon, AdminIcon } from './components/Icons'; // Added AdminIcon
+import { AdminPanel } from './components/AdminPanel';
+import { AboutPanel } from './components/AboutPanel'; // Import AboutPanel
+import { DISCLAIMER_TEXT, ADMIN_EMAILS } from './constants';
+import { NutriKickIcon, ProfileIcon, ChatIcon, LogoutIcon, LoginIcon, CloseIcon, AdminIcon, AboutIcon } from './components/Icons'; // Use NutriKickIcon, Added AboutIcon
 import { calculateIdealBodyWeightRange, calculateMacronutrientTargets } from './nutritionCalculators';
 import { LoadingSpinner } from './components/LoadingSpinner';
 
-const USER_PROFILE_STORAGE_KEY = 'nutrikick_userProfile_v3_auth'; // Cache key, now per user implicitly
-const CHAT_MESSAGES_STORAGE_KEY_PREFIX = 'nutrikick_chatMessages_v3_feedback_'; // Incremented version for feedback
-const GUEST_CHAT_MESSAGES_STORAGE_KEY = 'nutrikick_chatMessages_guest_v2_feedback_'; // Incremented version for feedback
-const DAILY_INTAKE_STORAGE_KEY_PREFIX = 'nutrikick_dailyIntake_v2_'; // Per user
-const NUTRIENT_TARGETS_STORAGE_KEY_PREFIX = 'nutrikick_nutrientTargets_v2_'; // Per user
+const USER_PROFILE_STORAGE_KEY = 'nutrikick_userProfile_v3_auth'; 
+const CHAT_MESSAGES_STORAGE_KEY_PREFIX = 'nutrikick_chatMessages_v3_feedback_'; 
+const GUEST_CHAT_MESSAGES_STORAGE_KEY = 'nutrikick_chatMessages_guest_v2_feedback_'; 
+const DAILY_INTAKE_STORAGE_KEY_PREFIX = 'nutrikick_dailyIntake_v2_'; 
+const NUTRIENT_TARGETS_STORAGE_KEY_PREFIX = 'nutrikick_nutrientTargets_v2_'; 
 
 
 const initialDefaultUserProfile: UserProfile = {
@@ -118,10 +120,12 @@ function getSupportedMimeType(): string | undefined {
     return undefined; 
 }
 
+type ActiveTab = 'chat' | 'profile' | 'admin' | 'about'; // Added 'about'
+
 const App: React.FC = () => {
   const [currentSession, setCurrentSession] = useState<SupabaseSession | null>(null);
   const [isGuestSession, setIsGuestSession] = useState<boolean>(false);
-  const [isAdmin, setIsAdmin] = useState<boolean>(false); // New state for admin status
+  const [isAdmin, setIsAdmin] = useState<boolean>(false);
   const [showAuthModal, setShowAuthModal] = useState<boolean>(false);
   const [authLoading, setAuthLoading] = useState<boolean>(true);
   const [authError, setAuthError] = useState<string | null>(null);
@@ -137,7 +141,7 @@ const App: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null); 
-  const [activeTab, setActiveTab] = useState<'chat' | 'profile' | 'admin'>('chat'); // Added 'admin' tab
+  const [activeTab, setActiveTab] = useState<ActiveTab>('chat'); 
 
   const [isRecording, setIsRecording] = useState(false);
   const [micPermissionError, setMicPermissionError] = useState<string | null>(null);
@@ -184,7 +188,7 @@ const App: React.FC = () => {
         setIsGuestSession(false);
         setIsAdmin(ADMIN_EMAILS.includes(session.user.email || ''));
       } else {
-        setIsGuestSession(true); // No session, start as guest
+        setIsGuestSession(true); 
         setIsAdmin(false);
         const storedGuestMessages = localStorage.getItem(GUEST_CHAT_MESSAGES_STORAGE_KEY);
         if (storedGuestMessages) {
@@ -199,20 +203,18 @@ const App: React.FC = () => {
 
     const unsubscribe = supabaseOnAuthStateChange((session) => {
       setCurrentSession(session);
-      if (session) { // User logged in or signed up
+      if (session) { 
         setIsGuestSession(false);
         setShowAuthModal(false);
         setIsAdmin(ADMIN_EMAILS.includes(session.user.email || ''));
-        // Clear guest chat when user logs in/signs up
         localStorage.removeItem(GUEST_CHAT_MESSAGES_STORAGE_KEY);
-        // Reset messages, profile related states will be handled by the next useEffect
         setMessages([]); 
         setUserProfile({ ...initialDefaultUserProfile });
         setDailyIntake({ ...initialDefaultDailyIntake });
         setNutrientTargets({ ...initialDefaultNutrientTargets });
         setCurrentBMR(null);
         setCurrentTDEE(null);
-      } else { // User logged out
+      } else { 
         setIsGuestSession(true);
         setIsAdmin(false);
         setUserProfile({ ...initialDefaultUserProfile });
@@ -236,7 +238,6 @@ const App: React.FC = () => {
       if (profileFromDb) {
         setUserProfile(profileFromDb);
       } else {
-        // If profileFromDb is null (new user), ensure email from session is populated
         setUserProfile(prev => ({ ...initialDefaultUserProfile, email: currentSession.user.email || '' }));
       }
     });
@@ -252,9 +253,6 @@ const App: React.FC = () => {
           const parsedMessages: Message[] = JSON.parse(storedMessages);
           setMessages(parsedMessages.map(msg => ({ ...msg, timestamp: new Date(msg.timestamp), feedback: msg.feedback || null })));
         } else {
-           // If no stored messages, and userProfile is not empty, don't set a welcome message yet.
-           // It will be handled by the next useEffect based on profile emptiness.
-           // If userProfile IS empty, then the welcome message for new authed users will be set.
            setMessages([]);
         }
       }
@@ -279,16 +277,13 @@ const App: React.FC = () => {
     } catch (error) { console.error("Error loading user-specific data from localStorage:", error); }
     
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentSession, isGuestSession, authLoading]); // Added authLoading to dependencies
+  }, [currentSession, isGuestSession, authLoading]); 
   
   useEffect(() => {
-    // This effect handles setting the initial message for authenticated users.
-    // It runs after userProfile is potentially loaded from DB and messages are loaded from localStorage.
     if (!isGuestSession && currentSession && messages.length === 0 && !authLoading) {
       if (isProfileConsideredEmpty(userProfile)) {
         setMessages([{ id: crypto.randomUUID(), sender: 'ai', text: AUTH_WELCOME_MESSAGE_TEXT_NO_PROFILE, timestamp: new Date(), feedback: null }]);
       }
-      // If profile is NOT empty and no messages, it implies a returning user with cleared chat, no special message needed.
     }
   }, [currentSession, userProfile, messages.length, authLoading, isGuestSession]);
 
@@ -312,7 +307,7 @@ const App: React.FC = () => {
       const targetsKey = getUserStorageKey(NUTRIENT_TARGETS_STORAGE_KEY_PREFIX, userId);
 
       if (chatKey && messages.length > 0) localStorage.setItem(chatKey, JSON.stringify(messages));
-      else if (chatKey) localStorage.removeItem(chatKey); // Remove if messages are empty for this user
+      else if (chatKey) localStorage.removeItem(chatKey); 
       
       if (intakeKey) localStorage.setItem(intakeKey, JSON.stringify(dailyIntake));
       if (targetsKey) localStorage.setItem(targetsKey, JSON.stringify(nutrientTargets));
@@ -323,7 +318,6 @@ const App: React.FC = () => {
 
   const handleProfileEditingComplete = useCallback(() => {
     setActiveTab('chat');
-    // Scroll logic is now in ChatWindow's useEffect
   }, []);
 
   const handleProfileUpdate = useCallback(async (updatedProfileFromEditor: UserProfile, isMainUpdate: boolean) => {
@@ -336,11 +330,9 @@ const App: React.FC = () => {
     const oldProfile = userProfile; 
     let profileToSave = { ...updatedProfileFromEditor };
 
-    // Ensure email is consistent with the authenticated user if not explicitly changed in form (if form allowed it)
     if (!profileToSave.email && currentSession.user.email) {
         profileToSave.email = currentSession.user.email;
     }
-
 
     if (profileToSave.isAthlete && profileToSave.sportsDiscipline === SportsDiscipline.Other && profileToSave.customSportsDiscipline?.trim()) {
       profileToSave.sportsDiscipline = profileToSave.customSportsDiscipline.trim();
@@ -349,39 +341,33 @@ const App: React.FC = () => {
                                             ? profileToSave.customSportsDiscipline 
                                             : '';
 
-
     if (isMainUpdate) {
-        // Preserve lastCheckInTimestamp if this is a main profile update, not a daily check-in update
         profileToSave.lastCheckInTimestamp = oldProfile.lastCheckInTimestamp; 
-    } else { // This is a daily check-in update (from ProfileEditor's second save button)
+    } else { 
         let dailyCheckInFieldsActuallyModified = false;
-        // Check if any of the daily check-in specific fields were actually changed
         if (profileToSave.moodToday !== oldProfile.moodToday ||
             profileToSave.trainedToday !== oldProfile.trainedToday ||
             profileToSave.hadBreakfast !== oldProfile.hadBreakfast ||
             profileToSave.energyLevel !== oldProfile.energyLevel ||
-            profileToSave.sleepHours !== oldProfile.sleepHours || // Added sleep check
-            profileToSave.sleepQuality !== oldProfile.sleepQuality // Added sleep check
+            profileToSave.sleepHours !== oldProfile.sleepHours || 
+            profileToSave.sleepQuality !== oldProfile.sleepQuality
            ) {
               dailyCheckInFieldsActuallyModified = true;
         }
         
         if (dailyCheckInFieldsActuallyModified) {
-            // If any daily check-in field has a value, update the timestamp
             if (profileToSave.moodToday || profileToSave.trainedToday || profileToSave.hadBreakfast || profileToSave.energyLevel || profileToSave.sleepHours || profileToSave.sleepQuality) {
                 profileToSave.lastCheckInTimestamp = Date.now();
             } else { 
-                // If all daily check-in fields are cleared, remove the timestamp
                 profileToSave.lastCheckInTimestamp = undefined; 
             }
         } else {
-            // If no daily check-in fields were modified, keep the old timestamp
             profileToSave.lastCheckInTimestamp = oldProfile.lastCheckInTimestamp;
         }
     }
 
-    setUserProfile(profileToSave); // Optimistic UI update
-    setError(null); // Clear previous errors
+    setUserProfile(profileToSave); 
+    setError(null); 
 
     try {
       await saveUserProfileToSupabase(profileToSave, userId);
@@ -391,16 +377,14 @@ const App: React.FC = () => {
       console.error("Failed to save profile to Supabase:", dbError);
       const message = dbError instanceof Error ? dbError.message : "Error desconocido al guardar en base de datos.";
       setError(`Error al guardar perfil en la nube: ${message}. Tus cambios locales están guardados, pero no en la nube.`);
-      // No rollback of optimistic setUserProfile here, user can retry or data persists locally.
       setTimeout(() => setError(null), 7000);
     }
     
-    // Only generate AI calculation message if it's the main profile update, not just daily check-in
     if (isMainUpdate) {
         let bmr: number | null = null;
         let tdee: number | null = null;
         let activityLevelName = "No especificado";
-        let activityFactor = 1.2; // Default for sedentary if nothing else matches
+        let activityFactor = 1.2; 
         const ageNum = parseInt(profileToSave.age);
         const weightNum = parseFloat(profileToSave.weight);
         const heightNum = parseInt(profileToSave.height);
@@ -409,20 +393,18 @@ const App: React.FC = () => {
         if (isNaN(ageNum) || isNaN(weightNum) || isNaN(heightNum) || ageNum <= 0 || weightNum <= 0 || heightNum <= 0) {
         calculationMessage += "Por favor, completa tu edad, peso y altura con valores válidos para calcular tus necesidades energéticas. 🙏\n\n";
         setCurrentBMR(null); setCurrentTDEE(null); setNutrientTargets(initialDefaultNutrientTargets);
-        } else if (heightNum < 60) { // Arbitrary low height check
+        } else if (heightNum < 60) { 
         calculationMessage += "**¡Atención Especial por Estatura!** 📏\n";
         calculationMessage += "Debido a que la estatura ingresada es menor a 60 cm, los cálculos estándar de requerimientos calóricos pueden no ser precisos y no se realizarán. Te recomiendo consultar a un profesional de la salud o nutricionista para obtener una evaluación adecuada, especialmente si esta estatura es correcta. Si fue un error, por favor, corrígela en tu perfil.\n\n";
         setCurrentBMR(null); setCurrentTDEE(null); setNutrientTargets(initialDefaultNutrientTargets);
-        } else if (ageNum < 18) { // Special handling for minors
+        } else if (ageNum < 18) { 
             calculationMessage += `Aquí tienes un resumen de tus necesidades estimadas:\n`;
-            // Mifflin-St Jeor for BMR
             if (profileToSave.gender === Gender.Male) bmr = (10 * weightNum) + (6.25 * heightNum) - (5 * ageNum) + 5;
             else if (profileToSave.gender === Gender.Female) bmr = (10 * weightNum) + (6.25 * heightNum) - (5 * ageNum) - 161;
             
             if (bmr && bmr > 0) {
-                // Simplified activity factor for minors for this example
-                if (profileToSave.isAthlete) activityFactor = 1.5; // Moderately active
-                else activityFactor = 1.4; // Lightly active
+                if (profileToSave.isAthlete) activityFactor = 1.5; 
+                else activityFactor = 1.4; 
                 tdee = bmr * activityFactor;
             }
             calculationMessage += `*   **Metabolismo Basal (MB) Estimado:** ${bmr && bmr > 0 ? bmr.toFixed(0) : 'N/A'} kcal/día 🔥\n`;
@@ -436,28 +418,26 @@ const App: React.FC = () => {
                 calculationMessage += `Tus objetivos aproximados de macronutrientes diarios (que deben ser validados y ajustados por un profesional) podrían ser: Proteína: ${targets.protein.toFixed(0)}g, Carbohidratos: ${targets.carbs.toFixed(0)}g, Grasas: ${targets.fats.toFixed(0)}g.\n\n`;
             }
         } else if (profileToSave.gender === Gender.Male || profileToSave.gender === Gender.Female) {
-        // Mifflin-St Jeor for BMR for adults
         if (profileToSave.gender === Gender.Male) bmr = (10 * weightNum) + (6.25 * heightNum) - (5 * ageNum) + 5;
         else bmr = (10 * weightNum) + (6.25 * heightNum) - (5 * ageNum) - 161;
 
-        // Determine activity factor and name
         if (profileToSave.isAthlete && profileToSave.trainingLoad) {
-            switch (profileToSave.trainingLoad) { // Values typically range 1.2 to 1.9+
+            switch (profileToSave.trainingLoad) { 
             case TrainingLoad.RestDay: activityFactor = 1.2; activityLevelName = "Día de Descanso 😴"; break;
             case TrainingLoad.LightTraining: activityFactor = 1.375; activityLevelName = "Entrenamiento Ligero 👟"; break;
             case TrainingLoad.ModerateTraining: activityFactor = 1.55; activityLevelName = "Entrenamiento Moderado 💪"; break;
             case TrainingLoad.IntenseTraining: activityFactor = 1.725; activityLevelName = "Entrenamiento Intenso 🔥"; break;
             case TrainingLoad.MatchDay: activityFactor = 1.9; activityLevelName = "Día de Partido 🏆"; break;
-            default: activityFactor = 1.55; activityLevelName = "Actividad Moderada (Atleta)"; // Fallback for athlete
+            default: activityFactor = 1.55; activityLevelName = "Actividad Moderada (Atleta)"; 
             }
-        } else if (!profileToSave.isAthlete && profileToSave.trainingFrequency) { // Non-athlete activity
+        } else if (!profileToSave.isAthlete && profileToSave.trainingFrequency) { 
             switch (profileToSave.trainingFrequency) {
                 case TrainingFrequency.NoneOrRarely: activityFactor = 1.2; activityLevelName = "Sedentario (poco o ningún ejercicio) 🛋️"; break;
                 case TrainingFrequency.TwoToThree: activityFactor = 1.375; activityLevelName = "Ejercicio Ligero (2-3 días/sem) 🚶"; break;
-                case TrainingFrequency.FourTimes: activityFactor = 1.4625; activityLevelName = "Ejercicio Moderado (4 días/sem) 🏃"; break; // Added this case
+                case TrainingFrequency.FourTimes: activityFactor = 1.4625; activityLevelName = "Ejercicio Moderado (4 días/sem) 🏃"; break; 
                 case TrainingFrequency.FiveToSix: activityFactor = 1.55; activityLevelName = "Ejercicio Moderado (5-6 días/sem) 🏋️"; break;
                 case TrainingFrequency.DailyOrMore: activityFactor = 1.725; activityLevelName = "Ejercicio Intenso (diario o más) ⚡"; break;
-                default: activityFactor = 1.375; activityLevelName = "Actividad Ligera (No Atleta)"; // Fallback for non-athlete
+                default: activityFactor = 1.375; activityLevelName = "Actividad Ligera (No Atleta)"; 
             }
         }
 
@@ -478,23 +458,13 @@ const App: React.FC = () => {
             setCurrentBMR(null); setCurrentTDEE(null); setNutrientTargets(initialDefaultNutrientTargets);
         }
         calculationMessage += `\nTe recomiendo que un profesional valide estos números y te ayude a crear un plan específico. Estoy aquí para darte ideas generales. ¿Qué te gustaría explorar ahora?`;
-        } // End of adult calculations
+        } 
         
-        // Add calculation message to chat, only if it's not empty and not just the initial part
         if (calculationMessage.trim() !== `¡Perfil de ${profileToSave.name || 'usuario'} actualizado! 🎉\n\n`.trim()) {
             setMessages(prev => [...prev, { id: crypto.randomUUID(), sender: 'ai', text: calculationMessage, timestamp: new Date(), feedback: null }]);
         }
-    } // End of isMainUpdate check
-
-    // This section was causing premature redirection to chat. 
-    // The ProfileEditor now controls when it's done (after main save AND daily check-in section interaction).
-    // if(isMainUpdate && !(profileToSave.moodToday || profileToSave.trainedToday || profileToSave.hadBreakfast || profileToSave.energyLevel)){ 
-    // } else {
-    //     handleProfileEditingComplete();
-    // }
-    
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userProfile, currentSession, isGuestSession, handleProfileEditingComplete]);
+    }
+  }, [userProfile, currentSession, isGuestSession, handleProfileEditingComplete]); // Added handleProfileEditingComplete
   
 
   const handleClearLocalStorage = () => {
@@ -514,8 +484,6 @@ const App: React.FC = () => {
 
           setMessages(isProfileConsideredEmpty(userProfile) ? [{ id: crypto.randomUUID(), sender: 'ai', text: AUTH_WELCOME_MESSAGE_TEXT_NO_PROFILE, timestamp: new Date(), feedback: null }] : []);
           setDailyIntake({ ...initialDefaultDailyIntake, date: getTodayDateString() });
-          // Nutrient targets are derived from profile, so they will recalculate or be cleared if profile is empty.
-          // Re-trigger calculation if profile exists:
           if (!isProfileConsideredEmpty(userProfile) && currentTDEE) {
             setNutrientTargets(calculateMacronutrientTargets(userProfile, currentTDEE));
           } else {
@@ -539,11 +507,11 @@ const App: React.FC = () => {
   const handleSendMessage = useCallback(async (userInput: string, imageInput?: {base64Data: string, mimeType: string}) => {
     setError(null);
     setIsLoading(true);
-    setLastInputMethod(imageInput ? 'image' : (userInput.startsWith("(Audio") ? 'voice' : 'text')); // Adjusted for new audio message format
+    setLastInputMethod(imageInput ? 'image' : (userInput.startsWith("(Audio") ? 'voice' : 'text')); 
 
     const userMessageText = imageInput ? (userInput || "Imagen adjunta") : userInput;
     const newUserMessage: Message = { id: crypto.randomUUID(), sender: 'user', text: userMessageText, timestamp: new Date(), feedback: null };
-    if (imageInput) { // If there's an image, the userMessage.text will be its data URI for display
+    if (imageInput) { 
         newUserMessage.text = `data:${imageInput.mimeType};base64,${imageInput.base64Data}`;
     }
     setMessages(prev => [...prev, newUserMessage]);
@@ -553,7 +521,7 @@ const App: React.FC = () => {
       geminiResponse = await generateNutriKickResponse(
         userInput, 
         userProfile, 
-        undefined, // Audio input not handled here, it's transcribed first
+        undefined, 
         imageInput, 
         dailyIntake, 
         nutrientTargets, 
@@ -619,7 +587,7 @@ const App: React.FC = () => {
                 }
             }
             processedText = processedText.replace(/\[MUSCLE_GAIN_PROTEIN_REMINDER_PLACEHOLDER\]/g, proteinReminder);
-        } else { // For guests, remove all tracking placeholders
+        } else { 
              processedText = processedText
                 .replace(/\[DAILY_CALORIES_CONSUMED_PLACEHOLDER\]/g, 'N/A')
                 .replace(/\[TARGET_CALORIES_PLACEHOLDER\]/g, 'N/A')
@@ -674,7 +642,7 @@ const App: React.FC = () => {
         };
 
         mediaRecorderRef.current.onstop = async () => {
-          stream.getTracks().forEach(track => track.stop()); // Release microphone
+          stream.getTracks().forEach(track => track.stop()); 
           if (audioChunksRef.current.length === 0) {
             console.warn("No audio data recorded.");
             setIsLoading(false); 
@@ -699,7 +667,7 @@ const App: React.FC = () => {
             const base64Audio = await blobToBase64(audioBlob);
             
             const geminiResponseForAudio = await generateNutriKickResponse(
-                null, // Pass null or a generic prompt for audio. GeminiService will use a default if null.
+                null, 
                 userProfile,
                 { base64Data: base64Audio, mimeType: actualMimeTypeRef.current },
                 undefined, 
@@ -756,7 +724,7 @@ const App: React.FC = () => {
                      if (nutrientTargets.protein && currentProtein < nutrientTargets.protein * 0.8) proteinReminder = "Recuerda tu objetivo de proteínas. ¡Sigue así!";
                  }
                 processedText = processedText.replace(/\[MUSCLE_GAIN_PROTEIN_REMINDER_PLACEHOLDER\]/g, proteinReminder);
-            } else { // Guest
+            } else { 
                 processedText = processedText
                     .replace(/\[DAILY_CALORIES_CONSUMED_PLACEHOLDER\]/g, 'N/A')
                     .replace(/\[TARGET_CALORIES_PLACEHOLDER\]/g, 'N/A')
@@ -785,7 +753,7 @@ const App: React.FC = () => {
         };
         mediaRecorderRef.current.start();
         setIsRecording(true);
-        if (chatInputRef.current) chatInputRef.current.value = ""; // Clear text input
+        if (chatInputRef.current) chatInputRef.current.value = ""; 
       } catch (err) {
         console.error("Error accessing microphone:", err);
         let message = "No se pudo acceder al micrófono.";
@@ -817,18 +785,16 @@ const App: React.FC = () => {
       }
       const stream = await navigator.mediaDevices.getUserMedia({ 
         video: { 
-          facingMode: "environment", // Prioritize back camera
-          width: { ideal: 1280 }, // Request HD but allow flexibility
+          facingMode: "environment", 
+          width: { ideal: 1280 }, 
           height: { ideal: 720 } 
         } 
       });
       videoStreamRef.current = stream;
       if (videoElementRef.current) {
         videoElementRef.current.srcObject = stream;
-        // Wait for video metadata to load to get correct dimensions
         videoElementRef.current.onloadedmetadata = () => {
             if (videoElementRef.current && canvasElementRef.current) {
-                // Set canvas dimensions based on video's actual dimensions to avoid distortion
                 canvasElementRef.current.width = videoElementRef.current.videoWidth;
                 canvasElementRef.current.height = videoElementRef.current.videoHeight;
             }
@@ -869,7 +835,6 @@ const App: React.FC = () => {
     }
     const video = videoElementRef.current;
     const canvas = canvasElementRef.current;
-    // Ensure canvas dimensions match video display size if it changed
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
 
@@ -880,11 +845,10 @@ const App: React.FC = () => {
     }
     context.drawImage(video, 0, 0, canvas.width, canvas.height);
     
-    // Default to JPEG for smaller size, with a fallback to PNG
-    let dataUrl = canvas.toDataURL('image/jpeg', 0.85); // 0.85 quality
+    let dataUrl = canvas.toDataURL('image/jpeg', 0.85); 
     let mimeType = 'image/jpeg';
 
-    if (!dataUrl || dataUrl.length < 1000) { // Basic check if JPEG creation failed or is tiny
+    if (!dataUrl || dataUrl.length < 1000) { 
         console.warn("JPEG conversion might have failed or produced a very small image, trying PNG.");
         dataUrl = canvas.toDataURL('image/png');
         mimeType = 'image/png';
@@ -898,42 +862,29 @@ const App: React.FC = () => {
     closeCamera();
     const base64Image = dataUrl.split(',')[1];
     
-    // Add a placeholder message for the user to describe the image, if they want
-    const imagePrompt = "Imagen capturada. Describe qué es o qué información necesitas de esta imagen. Si es una comida, ¡dame detalles para registrarla!";
-    // For now, we will use the text input for description. 
-    // The handleSendMessage will be called with this image and any text input.
-    // We can pre-fill the input if desired, or just let the user type.
     if(chatInputRef.current) {
-        // chatInputRef.current.value = "Imagen de comida: "; // Optional prefill
-        // chatInputRef.current.focus();
     }
     
-    // Send the image and current text input to handleSendMessage
-    // The user can add text before or after taking the picture.
     const currentTextInInput = chatInputRef.current?.value || "";
     handleSendMessage(currentTextInInput, { base64Data: base64Image, mimeType: mimeType });
   };
   
   const handleAuthAction = async (action: 'signUp' | 'signIn', email: string, pass: string) => {
     setAuthError(null);
-    setAuthLoading(true); // Use global auth loading
+    setAuthLoading(true); 
     try {
       if (action === 'signUp') {
         const { error: signUpError, user } = await signUpUser(email, pass);
         if (signUpError) throw signUpError;
-        // User will be set by onAuthStateChange, which also closes modal.
-        // For Supabase, usually need email confirmation.
         alert("¡Cuenta creada! Revisa tu correo electrónico para confirmar tu cuenta si es necesario, y luego inicia sesión.");
 
-      } else { // signIn
+      } else { 
         const { error: signInError, session: signedInSession } = await signInUser(email, pass);
         if (signInError) throw signInError;
-        // Session will be set by onAuthStateChange, which also closes modal.
       }
     } catch (err: any) {
       console.error(`${action} error:`, err);
       let friendlyMessage = err.message || `Error durante ${action === 'signUp' ? 'el registro' : 'el inicio de sesión'}.`;
-      // Customize messages based on Supabase error codes if needed
       if (err.message?.includes("User already registered")) friendlyMessage = "Este correo electrónico ya está registrado. Intenta iniciar sesión.";
       if (err.message?.includes("Invalid login credentials")) friendlyMessage = "Credenciales inválidas. Verifica tu correo y contraseña.";
       if (err.message?.includes("Email rate limit exceeded")) friendlyMessage = "Se han enviado demasiados correos. Intenta más tarde.";
@@ -951,16 +902,15 @@ const App: React.FC = () => {
             setAuthError(`Error al cerrar sesión: ${signOutError.message}`);
             console.error("Sign out error:", signOutError);
         }
-        // Auth state change will handle UI updates (clear profile, messages etc.)
         setAuthLoading(false);
-        setActiveTab('chat'); // Go to chat after logout
+        setActiveTab('chat'); 
     }
   };
 
-   if (authLoading && !currentSession && !isGuestSession) { // Show full page loader only during initial auth check
+   if (authLoading && !currentSession && !isGuestSession) { 
     return (
       <div className="flex flex-col items-center justify-center min-h-screen bg-slate-900 text-slate-200 p-4">
-        <LogoIcon className="text-6xl mb-4 text-orange-500" />
+        <NutriKickIcon className="text-6xl mb-4 text-orange-500" />
         <h1 className="text-3xl font-bold mb-2 text-slate-100">Nutri-Kick AI</h1>
         <LoadingSpinner size="lg" color="text-orange-500" />
         <p className="mt-4 text-slate-400">Conectando y preparando todo...</p>
@@ -971,7 +921,7 @@ const App: React.FC = () => {
    if (dbStatus === 'error') {
     return (
       <div className="flex flex-col items-center justify-center min-h-screen bg-slate-900 text-red-300 p-4">
-        <LogoIcon className="text-6xl mb-4 text-red-500" />
+        <NutriKickIcon className="text-6xl mb-4 text-red-500" />
         <h1 className="text-3xl font-bold mb-2 text-red-200">Error de Conexión</h1>
         <p className="text-center mb-2">No se pudo conectar con la base de datos.</p>
         <p className="text-sm text-center bg-red-900/50 p-3 rounded-md">{dbErrorDetails || "Revisa la configuración de Supabase y tu conexión a internet."}</p>
@@ -986,16 +936,16 @@ const App: React.FC = () => {
       {/* Header */}
       <header className="bg-slate-800 shadow-md p-3 flex justify-between items-center">
         <div className="flex items-center space-x-2">
-          <LogoIcon className="text-3xl text-orange-500" />
+          <NutriKickIcon className="text-3xl text-orange-500" />
           <h1 className="text-xl font-semibold text-slate-100 hidden sm:block">Nutri-Kick AI</h1>
         </div>
-        <div className="flex items-center space-x-2">
+        <div className="flex items-center space-x-1 sm:space-x-2">
           {currentSession && !isGuestSession && (
             <span className="text-xs text-slate-400 hidden md:inline">
               Hola, {userProfile.name || currentSession.user.email || 'Usuario'}
             </span>
           )}
-          {isAdmin && ( // Show Admin button if user is admin
+          {isAdmin && ( 
             <button
               onClick={() => setActiveTab('admin')}
               className={`p-2 rounded-full transition-colors ${activeTab === 'admin' ? 'bg-purple-600 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-700 hover:text-purple-400'}`}
@@ -1010,6 +960,13 @@ const App: React.FC = () => {
             aria-label="Chat" title="Chat"
           >
             <ChatIcon className="w-6 h-6" />
+          </button>
+           <button
+            onClick={() => setActiveTab('about')}
+            className={`p-2 rounded-full transition-colors ${activeTab === 'about' ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-700 hover:text-indigo-400'}`}
+            aria-label="Acerca de" title="Acerca de"
+          >
+            <AboutIcon className="w-6 h-6" />
           </button>
           {!isGuestSession && currentSession && (
             <button
@@ -1046,7 +1003,7 @@ const App: React.FC = () => {
             <ChatWindow
                 messages={messages}
                 onSendMessage={handleSendMessage}
-                isLoading={isLoading && lastInputMethod !== 'voice'} // Show general loading only if not voice input
+                isLoading={isLoading} 
                 chatContainerRef={chatContainerRef}
                 isListening={isRecording}
                 onToggleListening={handleToggleRecording}
@@ -1054,7 +1011,7 @@ const App: React.FC = () => {
                 chatInputRef={chatInputRef}
                 onOpenCamera={openCamera}
                 isGuest={isGuestSession}
-                onFeedback={handleMessageFeedback} // Pass feedback handler
+                onFeedback={handleMessageFeedback}
             />
         )}
         {activeTab === 'profile' && !isGuestSession && (
@@ -1067,8 +1024,11 @@ const App: React.FC = () => {
                 isGuest={isGuestSession} 
             />
         )}
-        {activeTab === 'admin' && isAdmin && ( // Show AdminPanel if tab is 'admin' and user is admin
+        {activeTab === 'admin' && isAdmin && ( 
             <AdminPanel />
+        )}
+        {activeTab === 'about' && (
+            <AboutPanel />
         )}
       </main>
 
@@ -1083,7 +1043,7 @@ const App: React.FC = () => {
           {successMessage}
         </div>
       )}
-      {error && activeTab !== 'chat' && ( // Show general errors for profile tab if not shown in chat
+      {error && activeTab !== 'chat' && ( 
         <div className="fixed bottom-4 right-4 bg-red-600 text-white py-2 px-4 rounded-lg shadow-md animate-fadeIn z-50">
           {error}
         </div>
@@ -1093,13 +1053,11 @@ const App: React.FC = () => {
       {showAuthModal && (
         <div 
             className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4 z-40 animate-fadeIn"
-            onClick={(e) => { if (e.target === e.currentTarget) setShowAuthModal(false);}} // Close on overlay click
+            onClick={(e) => { if (e.target === e.currentTarget) setShowAuthModal(false);}} 
         >
             <div className="relative w-full max-w-md">
                 <AuthForm
-                    onAuthSuccess={() => {
-                        // onAuthStateChange handles closing modal and setting session
-                    }}
+                    onAuthSuccess={() => {}}
                     isLoading={authLoading}
                     setIsLoading={setAuthLoading}
                     setAuthError={setAuthError}

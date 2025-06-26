@@ -121,4 +121,7 @@ Si el usuario envía audio, puede ser una consulta o un registro de comida. Proc
 *   Sé MUY CUIDADOSO con usuarios menores de 18 años (ver instrucciones especiales si se activa el aviso de edad).
 `;
 
-export const DISCLAIMER_TEXT = "Nutri-Kick AI ofrece información y estimaciones, pero no reemplaza el consejo médico o nutricional profesional. Consulta siempre a un experto calificado para tus necesidades de salud específicas.";
+export const APP_VERSION = "1.0.0";
+export const CONTACT_EMAIL = "14.martin.perea@gmail.com";
+
+export const DISCLAIMER_TEXT = "El ChatBot AI de nutrición ofrece información y estimaciones, pero no reemplaza el consejo médico o nutricional profesional. Consulta siempre a un experto calificado para tus necesidades de salud específicas.";

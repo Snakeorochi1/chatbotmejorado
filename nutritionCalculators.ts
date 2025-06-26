@@ -1,4 +1,5 @@
 
+
 import { UserProfile, Gender, PersonalGoal, NutrientTargets } from './types';
 
 const HEALTHY_BMI_MIN = 18.5;

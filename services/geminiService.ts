@@ -1,4 +1,5 @@
 
+
 import { GoogleGenAI, GenerateContentResponse, Part } from "@google/genai";
 import { UserProfile, Gender, PersonalGoal, DailyIntake, NutrientTargets, EstimatedFoodIntake, SportsDiscipline, AthleticGoalOptions, DietaryApproachOptions, DietaryRestrictionOptions, SleepQualityOptions } from '../types';
 import { GEMINI_MODEL_NAME, NUTRI_KICK_AI_PERSONA_PROMPT_TEMPLATE } from '../constants';

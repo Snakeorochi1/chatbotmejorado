@@ -1,4 +1,5 @@
 
+
 import { createClient, SupabaseClient, Session as SupabaseAuthSession, User as SupabaseAuthUser } from '@supabase/supabase-js';
 import { UserProfile, SportsDiscipline, DietaryApproachOptions, DietaryRestrictionOptions, SupabaseSession, SupabaseUser, AdminUserView, SleepQualityOptions } from '../types';
 

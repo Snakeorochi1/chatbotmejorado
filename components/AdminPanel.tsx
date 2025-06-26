@@ -1,204 +1,199 @@
 
+
 import React, { useState, useEffect } from 'react';
 import { fetchAllUserProfilesForAdmin } from '../services/supabaseService';
 import { AdminUserView } from '../types';
 import { LoadingSpinner } from './LoadingSpinner';
-import { UserIcon, ProfileIcon, ChartBarIcon } from './Icons'; // Added more icons
+import { UserIcon, ProfileIcon, ChartBarIcon } from './Icons'; // Added
 
-interface ProfileStats {
-  totalUsers: number;
-  athletesCount: number;
-  athletesPercentage: string;
-  nonAthletesCount: number;
-  nonAthletesPercentage: string;
-  genderDefinedCount: number;
-  genderDefinedPercentage: string;
-  genderUndefinedCount: number;
-  genderUndefinedPercentage: string;
-  goalDefinedCount: number;
-  goalDefinedPercentage: string;
-  goalUndefinedCount: number;
-  goalUndefinedPercentage: string;
-  averageAge: string;
-}
-
-const calculateProfileStats = (usersData: AdminUserView[]): ProfileStats => {
-  if (!usersData || usersData.length === 0) {
-    return {
-      totalUsers: 0,
-      athletesCount: 0, athletesPercentage: '0.0',
-      nonAthletesCount: 0, nonAthletesPercentage: '0.0',
-      genderDefinedCount: 0, genderDefinedPercentage: '0.0',
-      genderUndefinedCount: 0, genderUndefinedPercentage: '0.0',
-      goalDefinedCount: 0, goalDefinedPercentage: '0.0',
-      goalUndefinedCount: 0, goalUndefinedPercentage: '0.0',
-      averageAge: 'N/A',
-    };
-  }
-
-  const totalUsers = usersData.length;
-
-  const athletesCount = usersData.filter(u => u.is_athlete === true).length;
-  const nonAthletesCount = usersData.filter(u => u.is_athlete === false).length; 
-  // Note: is_athlete in user_profiles is NOT NULL and defaults to false. So users are either true or false.
-
-  const genderDefinedCount = usersData.filter(u => u.gender && u.gender.trim() !== "").length;
-  const genderUndefinedCount = totalUsers - genderDefinedCount;
-
-  const goalDefinedCount = usersData.filter(u => u.goals && u.goals.trim() !== "").length;
-  const goalUndefinedCount = totalUsers - goalDefinedCount;
-  
-  let sumOfAges = 0;
-  let countOfUsersWithAge = 0;
-  usersData.forEach(u => {
-    if (u.age) {
-      const ageNum = parseInt(u.age, 10);
-      if (!isNaN(ageNum) && ageNum > 0 && ageNum < 120) { // Basic validation
-        sumOfAges += ageNum;
-        countOfUsersWithAge++;
-      }
-    }
-  });
-  const averageAgeNum = countOfUsersWithAge > 0 ? (sumOfAges / countOfUsersWithAge) : null;
-
-  return {
-    totalUsers,
-    athletesCount,
-    athletesPercentage: totalUsers > 0 ? ((athletesCount / totalUsers) * 100).toFixed(1) : '0.0',
-    nonAthletesCount,
-    nonAthletesPercentage: totalUsers > 0 ? ((nonAthletesCount / totalUsers) * 100).toFixed(1) : '0.0',
-    genderDefinedCount,
-    genderDefinedPercentage: totalUsers > 0 ? ((genderDefinedCount / totalUsers) * 100).toFixed(1) : '0.0',
-    genderUndefinedCount,
-    genderUndefinedPercentage: totalUsers > 0 ? ((genderUndefinedCount / totalUsers) * 100).toFixed(1) : '0.0',
-    goalDefinedCount,
-    goalDefinedPercentage: totalUsers > 0 ? ((goalDefinedCount / totalUsers) * 100).toFixed(1) : '0.0',
-    goalUndefinedCount,
-    goalUndefinedPercentage: totalUsers > 0 ? ((goalUndefinedCount / totalUsers) * 100).toFixed(1) : '0.0',
-    averageAge: averageAgeNum ? `${averageAgeNum.toFixed(1)} años` : 'N/A',
-  };
-};
-
-
+// Added export here
 export const AdminPanel: React.FC = () => {
   const [users, setUsers] = useState<AdminUserView[]>([]);
-  const [stats, setStats] = useState<ProfileStats>(calculateProfileStats([]));
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
+  const [searchTerm, setSearchTerm] = useState<string>('');
+  const [sortConfig, setSortConfig] = useState<{ key: keyof AdminUserView; direction: 'ascending' | 'descending' } | null>(null);
 
   useEffect(() => {
-    const loadUsersAndStats = async () => {
+    const loadUsers = async () => {
       setIsLoading(true);
       setError(null);
       try {
         const fetchedUsers = await fetchAllUserProfilesForAdmin();
         setUsers(fetchedUsers);
-        setStats(calculateProfileStats(fetchedUsers));
       } catch (err: any) {
-        console.error("Error fetching users for admin panel:", err);
-        setError(err.message || "No se pudo cargar la lista de usuarios y estadísticas.");
+        setError(err.message || 'Error al cargar usuarios.');
+        console.error("AdminPanel Error:", err);
       } finally {
         setIsLoading(false);
       }
     };
-
-    loadUsersAndStats();
+    loadUsers();
   }, []);
 
-  const StatCard: React.FC<{ title: string; value: string | number; subValue?: string; icon?: React.ReactNode; colorClass?: string }> = 
-    ({ title, value, subValue, icon, colorClass = "text-orange-400" }) => (
-    <div className="bg-slate-800 p-4 rounded-lg shadow-md flex items-center space-x-3">
-      {icon && <div className={`p-2 rounded-full bg-slate-700 ${colorClass}`}>{icon}</div>}
-      <div>
-        <h3 className="text-sm font-medium text-slate-400 truncate" title={title}>{title}</h3>
-        <p className={`mt-1 text-2xl font-semibold ${colorClass}`}>{value}
-          {subValue && <span className="ml-1 text-xs font-normal text-slate-300">({subValue})</span>}
-        </p>
+  const handleSort = (key: keyof AdminUserView) => {
+    let direction: 'ascending' | 'descending' = 'ascending';
+    if (sortConfig && sortConfig.key === key && sortConfig.direction === 'ascending') {
+      direction = 'descending';
+    }
+    setSortConfig({ key, direction });
+  };
+
+  const sortedUsers = React.useMemo(() => {
+    let sortableUsers = [...users];
+    if (sortConfig !== null) {
+      sortableUsers.sort((a, b) => {
+        const aValue = a[sortConfig.key];
+        const bValue = b[sortConfig.key];
+
+        if (aValue === null || aValue === undefined) return sortConfig.direction === 'ascending' ? -1 : 1;
+        if (bValue === null || bValue === undefined) return sortConfig.direction === 'ascending' ? 1 : -1;
+        
+        // Special handling for age (numeric sort)
+        if (sortConfig.key === 'age') {
+            const aAge = parseInt(a.age || '0');
+            const bAge = parseInt(b.age || '0');
+             if (aAge < bAge) return sortConfig.direction === 'ascending' ? -1 : 1;
+             if (aAge > bAge) return sortConfig.direction === 'ascending' ? 1 : -1;
+             return 0;
+        }
+
+        if (typeof aValue === 'string' && typeof bValue === 'string') {
+          return aValue.localeCompare(bValue) * (sortConfig.direction === 'ascending' ? 1 : -1);
+        }
+        if (typeof aValue === 'boolean' && typeof bValue === 'boolean') {
+          return (aValue === bValue ? 0 : aValue ? -1 : 1) * (sortConfig.direction === 'ascending' ? 1 : -1);
+        }
+         if (typeof aValue === 'number' && typeof bValue === 'number') {
+          return (aValue - bValue) * (sortConfig.direction === 'ascending' ? 1 : -1);
+        }
+        // Fallback for dates or other types if necessary
+        if (aValue < bValue) return sortConfig.direction === 'ascending' ? -1 : 1;
+        if (aValue > bValue) return sortConfig.direction === 'ascending' ? 1 : -1;
+        return 0;
+      });
+    }
+    return sortableUsers;
+  }, [users, sortConfig]);
+
+  const filteredUsers = sortedUsers.filter(user => {
+    const nameMatch = user.name?.toLowerCase().includes(searchTerm.toLowerCase());
+    const emailMatch = user.email?.toLowerCase().includes(searchTerm.toLowerCase());
+    return nameMatch || emailMatch;
+  });
+
+  const getSortIndicator = (key: keyof AdminUserView) => {
+    if (!sortConfig || sortConfig.key !== key) return null;
+    return sortConfig.direction === 'ascending' ? '▲' : '▼';
+  };
+
+  const commonThClasses = "px-4 py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider cursor-pointer select-none";
+
+  if (isLoading) {
+    return (
+      <div className="flex justify-center items-center h-full p-8 bg-slate-700">
+        <LoadingSpinner size="lg" color="text-orange-500" />
+        <p className="ml-4 text-slate-300">Cargando datos de usuarios...</p>
       </div>
-    </div>
-  );
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="p-8 bg-slate-700 text-center">
+        <p className="text-red-400 text-lg">Error al cargar datos:</p>
+        <p className="text-red-300 bg-red-900/50 p-3 rounded-md mt-2">{error}</p>
+        <p className="text-xs text-slate-500 mt-3">Asegúrate de que las políticas RLS de Supabase permitan al administrador leer la tabla 'user_profiles'.</p>
+      </div>
+    );
+  }
 
   return (
-    <div className="p-4 md:p-6 bg-slate-700 text-slate-200 rounded-lg shadow-xl animate-fadeIn h-full overflow-y-auto custom-scrollbar">
-      <h2 className="text-2xl font-semibold text-slate-100 mb-2 border-b pb-3 border-slate-600">
-        Panel de Administración 🛡️
-      </h2>
+    <div className="p-4 md:p-6 bg-slate-800 text-slate-200 min-h-full animate-fadeIn">
+      <div className="flex flex-col sm:flex-row justify-between items-center mb-6 pb-4 border-b border-slate-700">
+        <h2 className="text-2xl font-semibold text-slate-100 flex items-center">
+          <ChartBarIcon className="w-7 h-7 mr-2 text-purple-400"/>
+          Panel de Administración de Usuarios
+        </h2>
+        <input
+          type="text"
+          placeholder="Buscar por nombre o email..."
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+          className="mt-3 sm:mt-0 px-4 py-2 bg-slate-700 border border-slate-600 text-slate-200 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-purple-500 sm:text-sm placeholder-slate-400"
+        />
+      </div>
       
-      {isLoading && (
-        <div className="flex justify-center items-center py-10">
-          <LoadingSpinner size="lg" color="text-orange-500" />
-          <p className="ml-3 text-slate-300">Cargando datos del panel...</p>
+      {filteredUsers.length === 0 && !isLoading && (
+        <div className="text-center py-10">
+          <UserIcon className="w-16 h-16 mx-auto text-slate-500 mb-4" />
+          <p className="text-slate-400 text-lg">No se encontraron usuarios.</p>
+          {searchTerm && <p className="text-slate-500 text-sm">Prueba con otro término de búsqueda.</p>}
         </div>
       )}
 
-      {error && (
-        <div className="bg-red-700/30 border border-red-500 text-red-200 px-4 py-3 rounded-md my-6 shadow-md animate-fadeIn" role="alert">
-          <p className="font-bold text-red-100">Error al cargar datos:</p>
-          <p className="text-sm">{error}</p>
+      {filteredUsers.length > 0 && (
+        <div className="overflow-x-auto shadow-xl rounded-lg bg-slate-700 custom-scrollbar">
+          <table className="min-w-full divide-y divide-slate-600">
+            <thead className="bg-slate-700 sticky top-0">
+              <tr>
+                <th scope="col" className={`${commonThClasses}`} onClick={() => handleSort('name')}>
+                  Nombre {getSortIndicator('name')}
+                </th>
+                <th scope="col" className={`${commonThClasses}`} onClick={() => handleSort('email')}>
+                  Email {getSortIndicator('email')}
+                </th>
+                 <th scope="col" className={`${commonThClasses} hidden md:table-cell`} onClick={() => handleSort('age')}>
+                  Edad {getSortIndicator('age')}
+                </th>
+                <th scope="col" className={`${commonThClasses} hidden sm:table-cell`} onClick={() => handleSort('is_athlete')}>
+                  Atleta {getSortIndicator('is_athlete')}
+                </th>
+                <th scope="col" className={`${commonThClasses} hidden lg:table-cell`} onClick={() => handleSort('gender')}>
+                  Género {getSortIndicator('gender')}
+                </th>
+                <th scope="col" className={`${commonThClasses} hidden md:table-cell`} onClick={() => handleSort('goals')}>
+                  Objetivo Principal {getSortIndicator('goals')}
+                </th>
+                <th scope="col" className={`${commonThClasses} hidden lg:table-cell`} onClick={() => handleSort('last_updated_at')}>
+                  Última Actualización {getSortIndicator('last_updated_at')}
+                </th>
+                <th scope="col" className={`${commonThClasses} text-center`}>
+                  Acciones
+                </th>
+              </tr>
+            </thead>
+            <tbody className="bg-slate-700 divide-y divide-slate-600">
+              {filteredUsers.map((user) => (
+                <tr key={user.id} className="hover:bg-slate-600/50 transition-colors duration-150">
+                  <td className="px-4 py-3 whitespace-nowrap text-sm font-medium text-slate-100">{user.name || <span className="text-slate-400 italic">N/D</span>}</td>
+                  <td className="px-4 py-3 whitespace-nowrap text-sm text-slate-300">{user.email || <span className="text-slate-400 italic">N/D</span>}</td>
+                  <td className="px-4 py-3 whitespace-nowrap text-sm text-slate-300 hidden md:table-cell">{user.age || <span className="text-slate-400 italic">N/D</span>}</td>
+                  <td className="px-4 py-3 whitespace-nowrap text-sm text-slate-300 hidden sm:table-cell">
+                    {user.is_athlete === true ? 'Sí ✅' : (user.is_athlete === false ? 'No 🚫' : <span className="text-slate-400 italic">N/D</span>)}
+                  </td>
+                  <td className="px-4 py-3 whitespace-nowrap text-sm text-slate-300 hidden lg:table-cell">{user.gender || <span className="text-slate-400 italic">N/D</span>}</td>
+                  <td className="px-4 py-3 text-sm text-slate-300 max-w-xs truncate hidden md:table-cell" title={user.goals || ''}>{user.goals || <span className="text-slate-400 italic">N/D</span>}</td>
+                  <td className="px-4 py-3 whitespace-nowrap text-sm text-slate-400 hidden lg:table-cell">{user.last_updated_at || <span className="text-slate-400 italic">N/D</span>}</td>
+                  <td className="px-4 py-3 whitespace-nowrap text-sm font-medium text-center">
+                    <button 
+                        className="text-purple-400 hover:text-purple-300 p-1 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500" 
+                        title="Ver Perfil Completo (Próximamente)"
+                        disabled // Functionality not implemented yet
+                    >
+                      <ProfileIcon className="w-5 h-5"/>
+                    </button>
+                    {/* Placeholder for more actions */}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
-
-      {!isLoading && !error && (
-        <>
-          {/* Statistics Section */}
-          <h3 className="text-xl font-semibold text-slate-200 mt-4 mb-4">Resumen de Estadísticas</h3>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
-            <StatCard title="Total Usuarios" value={stats.totalUsers} icon={<UserIcon className="w-6 h-6"/>} />
-            <StatCard title="Atletas" value={stats.athletesCount} subValue={`${stats.athletesPercentage}%`} icon={<ProfileIcon className="w-6 h-6"/>} colorClass="text-sky-400"/>
-            <StatCard title="No Atletas" value={stats.nonAthletesCount} subValue={`${stats.nonAthletesPercentage}%`} icon={<ProfileIcon className="w-6 h-6"/>} colorClass="text-teal-400"/>
-            <StatCard title="Género Sin Definir" value={stats.genderUndefinedCount} subValue={`${stats.genderUndefinedPercentage}%`} icon={<ProfileIcon className="w-6 h-6"/>} colorClass="text-slate-400"/>
-            <StatCard title="Objetivo Sin Definir" value={stats.goalUndefinedCount} subValue={`${stats.goalUndefinedPercentage}%`} icon={<ProfileIcon className="w-6 h-6"/>} colorClass="text-slate-400"/>
-            <StatCard title="Edad Promedio" value={stats.averageAge} icon={<ChartBarIcon className="w-6 h-6"/>} colorClass="text-purple-400"/>
-          </div>
-
-          {/* Users Table Section */}
-          <h3 className="text-xl font-semibold text-slate-200 mb-4">Lista de Usuarios Registrados</h3>
-          {users.length === 0 ? (
-            <div className="text-center py-10">
-              <p className="text-slate-400 text-lg">No hay usuarios registrados actualmente.</p>
-            </div>
-          ) : (
-            <div className="overflow-x-auto custom-scrollbar rounded-lg shadow-md border border-slate-600">
-              <table className="min-w-full divide-y divide-slate-600 bg-slate-800">
-                <thead className="bg-slate-900/70">
-                  <tr>
-                    <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-orange-400 uppercase tracking-wider">
-                      Nombre
-                    </th>
-                    <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-orange-400 uppercase tracking-wider">
-                      Email
-                    </th>
-                    <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-orange-400 uppercase tracking-wider hidden sm:table-cell">
-                      ID Usuario
-                    </th>
-                    <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-orange-400 uppercase tracking-wider hidden md:table-cell">
-                      Última Actualización
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-600/50">
-                  {users.map((user) => (
-                    <tr key={user.id} className="hover:bg-slate-700/50 transition-colors">
-                      <td className="px-4 py-3 whitespace-nowrap text-sm font-medium text-slate-100">
-                        {user.name || <span className="text-slate-400 italic">No especificado</span>}
-                      </td>
-                      <td className="px-4 py-3 whitespace-nowrap text-sm text-slate-300">
-                        {user.email || <span className="text-slate-400 italic">No especificado</span>}
-                      </td>
-                      <td className="px-4 py-3 whitespace-nowrap text-sm text-slate-400 hidden sm:table-cell truncate max-w-xs" title={user.id}>
-                        {user.id}
-                      </td>
-                      <td className="px-4 py-3 whitespace-nowrap text-sm text-slate-400 hidden md:table-cell">
-                        {user.last_updated_at}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </>
-      )}
+      <p className="text-xs text-slate-500 mt-6 text-center">
+        Total de usuarios en la vista actual: {filteredUsers.length}
+      </p>
     </div>
   );
 };

@@ -1,4 +1,5 @@
 
+
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   UserProfile, Gender, FootballPosition, TrainingLoad, TrainingFrequency, PersonalGoal,
@@ -458,7 +459,7 @@ export const ProfileEditor: React.FC<ProfileEditorProps> = ({
     }
   };
 
-  if (isGuest) { // Guests should not see the profile editor
+  if (isGuest) { 
     return (
         <div className="p-4 md:p-6 bg-slate-700 text-slate-200 rounded-lg shadow-xl animate-fadeIn text-center">
             <h2 className="text-xl font-semibold text-slate-100 mb-4">Modo Invitado</h2>
